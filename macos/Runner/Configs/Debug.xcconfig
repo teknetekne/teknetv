@@ -1,0 +1,6 @@
+#include "../../Flutter/Flutter-Debug.xcconfig"
+#include "Warnings.xcconfig"
+
+// Disable code signing for local development
+CODE_SIGN_IDENTITY = 
+CODE_SIGN_STYLE = Automatic

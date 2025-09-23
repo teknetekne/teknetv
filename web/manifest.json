@@ -1,11 +1,11 @@
 {
-    "name": "Tekneci Mac Izletir",
-    "short_name": "Tekneci Mac Izletir",
+    "name": "teknetv",
+    "short_name": "teknetv",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#000000",
     "theme_color": "#000000",
-    "description": "tekneci maç izletir - M3U Stream Player",
+    "description": "tekneci maç izletir",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

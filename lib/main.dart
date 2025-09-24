@@ -947,6 +947,8 @@ class _TVPlayerScreenState extends State<TVPlayerScreen> {
   bool _isInitialized = false;
   bool _isInitializing = false;
   String? _currentUrl;
+  final List<FocusNode> _controlFocusNodes = List.generate(5, (index) => FocusNode());
+  int _focusedControlIndex = 0;
 
   @override
   void initState() {
@@ -955,13 +957,22 @@ class _TVPlayerScreenState extends State<TVPlayerScreen> {
   }
 
   @override
-  void didUpdateWidget(PlayerScreen oldWidget) {
+  void didUpdateWidget(TVPlayerScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     // Reinitialize if URL changed
     if (oldWidget.url != widget.url) {
       _initializeController();
     }
+    // Focus first control when controls become visible
+    if (widget.showControls && !oldWidget.showControls) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _controlFocusNodes[0].requestFocus();
+        }
+      });
+    }
   }
+
 
   Future<void> _initializeController() async {
     if (_isInitializing) return;
@@ -1025,6 +1036,9 @@ class _TVPlayerScreenState extends State<TVPlayerScreen> {
   @override
   void dispose() {
     _controller?.dispose();
+    for (var node in _controlFocusNodes) {
+      node.dispose();
+    }
     super.dispose();
   }
 
@@ -1050,10 +1064,10 @@ class _TVPlayerScreenState extends State<TVPlayerScreen> {
                         ),
                 ),
                 
-                // TV-optimized Controls overlay
+                // TV-optimized bottom controls bar (like original)
                 if (widget.showControls)
                   Positioned(
-                    bottom: 32,
+                    bottom: 16,
                     left: 0,
                     right: 0,
                     child: SafeArea(
@@ -1061,66 +1075,88 @@ class _TVPlayerScreenState extends State<TVPlayerScreen> {
                       left: true,
                       right: true,
                       child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 32),
-                        padding: const EdgeInsets.all(20),
+                        margin: const EdgeInsets.symmetric(horizontal: 16),
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                         decoration: BoxDecoration(
                           color: Colors.black.withOpacity(0.8),
-                          borderRadius: BorderRadius.circular(16),
+                          borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: Colors.white.withOpacity(0.3),
+                            color: Colors.white.withOpacity(0.2),
                             width: 1,
                           ),
                         ),
                         child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: [
-                            // Play/Pause
-                            _buildTVControlButton(
-                              icon: _controller?.value.isPlaying == true 
-                                  ? Icons.pause 
-                                  : Icons.play_arrow,
-                              label: _controller?.value.isPlaying == true 
-                                  ? 'Duraklat' 
-                                  : 'Oynat',
-                              onPressed: () {
-                                if (_controller != null) {
-                                  setState(() {
-                                    if (_controller!.value.isPlaying) {
-                                      _controller!.pause();
-                                    } else {
-                                      _controller!.play();
-                                    }
-                                  });
-                                }
-                              },
+                            // Play/Pause (leftmost)
+                            Focus(
+                              focusNode: _controlFocusNodes[0],
+                              onKeyEvent: (node, event) => _handleControlKeyEvent(0, event),
+                              child: _buildHorizontalControlButton(
+                                icon: _controller?.value.isPlaying == true 
+                                    ? Icons.pause 
+                                    : Icons.play_arrow,
+                                onPressed: () {
+                                  if (_controller != null) {
+                                    setState(() {
+                                      if (_controller!.value.isPlaying) {
+                                        _controller!.pause();
+                                      } else {
+                                        _controller!.play();
+                                      }
+                                    });
+                                  }
+                                },
+                                isFocused: _focusedControlIndex == 0,
+                              ),
                             ),
+                            const SizedBox(width: 12),
                             
                             // Previous Channel
-                            _buildTVControlButton(
-                              icon: Icons.skip_previous,
-                              label: 'Önceki Kanal',
-                              onPressed: widget.onPrevChannel,
+                            Focus(
+                              focusNode: _controlFocusNodes[1],
+                              onKeyEvent: (node, event) => _handleControlKeyEvent(1, event),
+                              child: _buildHorizontalControlButton(
+                                icon: Icons.skip_previous,
+                                onPressed: widget.onPrevChannel,
+                                isFocused: _focusedControlIndex == 1,
+                              ),
                             ),
+                            const SizedBox(width: 12),
                             
                             // Next Channel
-                            _buildTVControlButton(
-                              icon: Icons.skip_next,
-                              label: 'Sonraki Kanal',
-                              onPressed: widget.onNextChannel,
+                            Focus(
+                              focusNode: _controlFocusNodes[2],
+                              onKeyEvent: (node, event) => _handleControlKeyEvent(2, event),
+                              child: _buildHorizontalControlButton(
+                                icon: Icons.skip_next,
+                                onPressed: widget.onNextChannel,
+                                isFocused: _focusedControlIndex == 2,
+                              ),
                             ),
+                            const SizedBox(width: 12),
                             
                             // Refresh
-                            _buildTVControlButton(
-                              icon: Icons.refresh,
-                              label: 'Yenile',
-                              onPressed: widget.onRefresh,
+                            Focus(
+                              focusNode: _controlFocusNodes[3],
+                              onKeyEvent: (node, event) => _handleControlKeyEvent(3, event),
+                              child: _buildHorizontalControlButton(
+                                icon: Icons.refresh,
+                                onPressed: widget.onRefresh,
+                                isFocused: _focusedControlIndex == 3,
+                              ),
                             ),
                             
-                            // Channel List
-                            _buildTVControlButton(
-                              icon: Icons.list,
-                              label: 'Kanal Listesi',
-                              onPressed: widget.onToggleChannelList,
+                            const Spacer(),
+                            
+                            // Channel List (rightmost)
+                            Focus(
+                              focusNode: _controlFocusNodes[4],
+                              onKeyEvent: (node, event) => _handleControlKeyEvent(4, event),
+                              child: _buildHorizontalControlButton(
+                                icon: Icons.list,
+                                onPressed: widget.onToggleChannelList,
+                                isFocused: _focusedControlIndex == 4,
+                              ),
                             ),
                           ],
                         ),
@@ -1138,50 +1174,93 @@ class _TVPlayerScreenState extends State<TVPlayerScreen> {
     );
   }
 
-  Widget _buildTVControlButton({
+  KeyEventResult _handleControlKeyEvent(int controlIndex, KeyEvent event) {
+    if (event is KeyDownEvent) {
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.arrowLeft:
+          if (controlIndex > 0) {
+            setState(() {
+              _focusedControlIndex = controlIndex - 1;
+            });
+            _controlFocusNodes[_focusedControlIndex].requestFocus();
+          }
+          return KeyEventResult.handled;
+        case LogicalKeyboardKey.arrowRight:
+          if (controlIndex < _controlFocusNodes.length - 1) {
+            setState(() {
+              _focusedControlIndex = controlIndex + 1;
+            });
+            _controlFocusNodes[_focusedControlIndex].requestFocus();
+          }
+          return KeyEventResult.handled;
+        case LogicalKeyboardKey.select:
+        case LogicalKeyboardKey.enter:
+          // Trigger the button action
+          switch (controlIndex) {
+            case 0: // Play/Pause
+              if (_controller != null) {
+                setState(() {
+                  if (_controller!.value.isPlaying) {
+                    _controller!.pause();
+                  } else {
+                    _controller!.play();
+                  }
+                });
+              }
+              break;
+            case 1: // Previous Channel
+              widget.onPrevChannel?.call();
+              break;
+            case 2: // Next Channel
+              widget.onNextChannel?.call();
+              break;
+            case 3: // Refresh
+              widget.onRefresh?.call();
+              break;
+            case 4: // Channel List
+              widget.onToggleChannelList?.call();
+              break;
+          }
+          return KeyEventResult.handled;
+      }
+    }
+    return KeyEventResult.ignored;
+  }
+
+  Widget _buildHorizontalControlButton({
     required IconData icon,
-    required String label,
     required VoidCallback? onPressed,
+    bool isFocused = false,
   }) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: 64,
-          height: 64,
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: Colors.white.withOpacity(0.3),
-              width: 2,
-            ),
-          ),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: onPressed,
-              borderRadius: BorderRadius.circular(32),
-              child: Center(
-                child: Icon(
-                  icon,
-                  color: Colors.white,
-                  size: 28,
-                ),
-              ),
+    return Container(
+      width: 56,
+      height: 56,
+      decoration: BoxDecoration(
+        color: isFocused 
+            ? Colors.white.withOpacity(0.2)
+            : Colors.white.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(28),
+        border: Border.all(
+          color: isFocused 
+              ? Colors.white
+              : Colors.white.withOpacity(0.3),
+          width: isFocused ? 2 : 1,
+        ),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onPressed,
+          borderRadius: BorderRadius.circular(28),
+          child: Center(
+            child: Icon(
+              icon,
+              color: isFocused ? Colors.white : Colors.white70,
+              size: 24,
             ),
           ),
         ),
-        const SizedBox(height: 8),
-        Text(
-          label,
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-            color: Colors.white70,
-            fontWeight: FontWeight.w500,
-          ),
-          textAlign: TextAlign.center,
-        ),
-      ],
+      ),
     );
   }
 }

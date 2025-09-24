@@ -41,7 +41,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   bool _isChannelListOpen = false;
   bool _showUiOverlays = true;
   Timer? _uiHideTimer;
-  bool _listJustOpened = false;
 
   @override
   void initState() {
@@ -294,39 +293,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent) {
-          // Any key activity shows overlays and resets hide timer
-          if (!_showUiOverlays) {
-            setState(() { _showUiOverlays = true; });
-          }
-          _scheduleHideOverlays();
-          switch (event.logicalKey) {
-            case LogicalKeyboardKey.arrowUp:
-              // Let focus system handle D-pad
-              return KeyEventResult.ignored;
-            case LogicalKeyboardKey.arrowDown:
-              // Let focus system handle D-pad
-              return KeyEventResult.ignored;
-            case LogicalKeyboardKey.select:
-            case LogicalKeyboardKey.enter:
-              // Let focused widget handle activation
-              return KeyEventResult.ignored;
-            case LogicalKeyboardKey.backspace:
-            case LogicalKeyboardKey.escape:
-              // Close overlays if open
-              if (_isChannelListOpen || _showUiOverlays) {
-                setState(() {
-                  _isChannelListOpen = false;
-                  _showUiOverlays = false;
-                });
-                return KeyEventResult.handled;
-              }
-              return KeyEventResult.ignored;
-          }
-        }
-        return KeyEventResult.ignored;
-      },
+      onKeyEvent: (node, event) => KeyEventResult.ignored,
       child: Scaffold(
       body: _isLoading
           ? const Center(
@@ -376,9 +343,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             onToggleChannelList: () {
                               setState(() {
                                 _isChannelListOpen = !_isChannelListOpen;
-                                if (_isChannelListOpen) {
-                                  _listJustOpened = true;
-                                }
                               });
                               if (_isChannelListOpen) {
                                 setState(() {
@@ -492,20 +456,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             height: 50,
                             child: MouseRegion(
                               cursor: SystemMouseCursors.click,
-                              child: Focus(
-                                canRequestFocus: true,
-                                autofocus: _listJustOpened && isCurrentChannel,
-                                onFocusChange: (has) {
-                                  if (has && _listJustOpened) {
-                                    // reset the flag after first focus lands
-                                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                                      if (mounted) {
-                                        setState(() { _listJustOpened = false; });
-                                      }
-                                    });
-                                  }
-                                },
-                                child: Container(
+                              child: Container(
                                 decoration: BoxDecoration(
                                   color: isCurrentChannel ? const Color(0x33A855F7) : null, // light purple bg
                                   border: Border(
@@ -517,47 +468,29 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                                 ),
                                   child: Material(
                                   color: Colors.transparent,
-                                    child: Shortcuts(
-                                      shortcuts: <LogicalKeySet, Intent>{
-                                        LogicalKeySet(LogicalKeyboardKey.enter): const ActivateIntent(),
-                                        LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+                                    child: InkWell(
+                                      onTap: () {
+                                        _setCurrentChannel(channel);
+                                        _scheduleHideOverlays();
                                       },
-                                      child: Actions(
-                                        actions: <Type, Action<Intent>>{
-                                          ActivateIntent: CallbackAction<ActivateIntent>(
-                                            onInvoke: (intent) {
-                                              _setCurrentChannel(channel);
-                                              _scheduleHideOverlays();
-                                              return null;
-                                            },
-                                          ),
-                                        },
-                                        child: InkWell(
-                                          onTap: () {
-                                            _setCurrentChannel(channel);
-                                            _scheduleHideOverlays();
-                                          },
-                                          hoverColor: Colors.white10,
-                                          child: Padding(
-                                            padding: const EdgeInsets.symmetric(horizontal: 12),
-                                            child: Align(
-                                              alignment: Alignment.centerLeft,
-                                              child: Text(
-                                                channel['title'] ?? 'Unknown',
-                                                maxLines: 1,
-                                                overflow: TextOverflow.fade,
-                                                softWrap: false,
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.w600,
-                                                  color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
-                                                ),
-                                              ),
+                                      hoverColor: Colors.white10,
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                                        child: Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            channel['title'] ?? 'Unknown',
+                                            maxLines: 1,
+                                            overflow: TextOverflow.fade,
+                                            softWrap: false,
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
                                             ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                ),
                                 ),
                               ),
                             ),
@@ -716,19 +649,13 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
                           return Padding(
                             padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
-                            child: FocusTraversalGroup(
-                              policy: OrderedTraversalPolicy(),
-                              child: Shortcuts(
-                                shortcuts: <LogicalKeySet, Intent>{
-                                  LogicalKeySet(LogicalKeyboardKey.arrowLeft): const DirectionalFocusIntent(TraversalDirection.left),
-                                  LogicalKeySet(LogicalKeyboardKey.arrowRight): const DirectionalFocusIntent(TraversalDirection.right),
-                                },
-                                child: Row(
+                            child: Row(
                                 children: [
-                        // Play/Pause (leftmost)
-                                  _TvFocusableFab(
+                                  // Play/Pause (leftmost)
+                                  FloatingActionButton.small(
                           heroTag: "embedded_play_pause",
-                                    onActivate: () {
+                                    elevation: 0,
+                                    onPressed: () {
                                       if (_controller != null) {
                                         setState(() {
                                           if (_controller!.value.isPlaying) {
@@ -739,45 +666,42 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                         });
                                       }
                                     },
-                          elevation: 0,
-                                    icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
+                                    child: Icon(_controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow),
                         ),
                                   const SizedBox(width: 8),
                         // Refresh (next to pause)
-                                  _TvFocusableFab(
+                                  FloatingActionButton.small(
                           heroTag: "embedded_refresh",
                                     elevation: 0,
-                                    onActivate: widget.onRefresh,
-                                    icon: Icons.refresh,
+                                    onPressed: widget.onRefresh,
+                                    child: const Icon(Icons.refresh),
                         ),
                                   const SizedBox(width: 8),
                         // Prev channel
-                                  _TvFocusableFab(
+                                  FloatingActionButton.small(
                           heroTag: "embedded_prev",
                                     elevation: 0,
-                                    onActivate: widget.onPrevChannel,
-                                    icon: Icons.skip_previous,
+                                    onPressed: widget.onPrevChannel,
+                                    child: const Icon(Icons.skip_previous),
                         ),
                                   const SizedBox(width: 8),
                         // Next channel
-                                  _TvFocusableFab(
+                                  FloatingActionButton.small(
                           heroTag: "embedded_next",
                                     elevation: 0,
-                                    onActivate: widget.onNextChannel,
-                                    icon: Icons.skip_next,
+                                    onPressed: widget.onNextChannel,
+                                    child: const Icon(Icons.skip_next),
                         ),
                         const Spacer(),
                         // Channel list (far right)
-                                  _TvFocusableFab(
+                                  FloatingActionButton.small(
                           heroTag: "embedded_toggle_list",
                                     elevation: 0,
-                                    onActivate: widget.onToggleChannelList,
-                                    icon: Icons.list,
+                                    onPressed: widget.onToggleChannelList,
+                                    child: const Icon(Icons.list),
                                   ),
                                 ],
-                                ),
                               ),
-                            ),
                           );
                         },
                       ),
@@ -790,40 +714,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
   }
 }
 
-class _TvFocusableFab extends StatelessWidget {
-  final String heroTag;
-  final VoidCallback? onActivate;
-  final double elevation;
-  final IconData icon;
-
-  const _TvFocusableFab({
-    required this.heroTag,
-    required this.icon,
-    this.onActivate,
-    this.elevation = 0,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Focus(
-      canRequestFocus: true,
-      child: Builder(
-        builder: (context) {
-          final bool focused = Focus.of(context).hasFocus;
-          return FloatingActionButton.small(
-            heroTag: heroTag,
-            elevation: elevation,
-            backgroundColor: focused ? Colors.white12 : null,
-            onPressed: onActivate,
-            child: Icon(
-              icon,
-              color: focused ? Colors.amber : null, // Focused icon: yellow
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
+// TV-specific focusable FAB removed; reverted to standard FABs
 
 // Removed old fullscreen page implementation; now fullscreen is same-page overlay

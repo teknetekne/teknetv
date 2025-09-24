@@ -1,16 +1,16 @@
 # teknetv
 
-A new Flutter project.
+Windows-focused build notes
 
-## Getting Started
+### Windows portable build
+- We now produce a portable Windows bundle that includes `teknetv.exe`, `flutter_windows.dll`, ICU data, plugins, native assets, and `data/flutter_assets`.
+- In GitHub Actions, download the artifact named `teknetv-windows-portable` and unzip it. Run `teknetv.exe` directly from the unzipped folder.
 
-This project is a starting point for a Flutter application.
+### Local Windows build
+1. Install Flutter (stable) and enable desktop: `flutter config --enable-windows-desktop`.
+2. Fetch deps: `flutter pub get`.
+3. Build: `flutter build windows --release`.
+4. Run from bundle folder: `build/windows/x64/runner/Release/teknetv.exe`.
+   - Ensure you run the EXE from that folder so it can load `flutter_windows.dll` and `icudtl.dat` next to it.
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+If you see "flutter_windows.dll not found", it means the EXE was moved without its sibling files. Always run within the Release folder, or use the portable ZIP artifact.

@@ -23,14 +23,22 @@ jobs:
     - name: Get dependencies
       run: flutter pub get
     
-    - name: Build Windows EXE
+    - name: Build Windows
       run: flutter build windows --release
-    
-    - name: Upload Windows EXE
+
+    - name: Create portable ZIP (includes flutter_windows.dll and assets)
+      shell: pwsh
+      run: |
+        $bundlePath = "build/windows/x64/runner/Release"
+        $zipPath = "teknetv-windows-portable.zip"
+        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+        Compress-Archive -Path "$bundlePath/*" -DestinationPath $zipPath -CompressionLevel Optimal
+
+    - name: Upload Windows portable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: teknetv-windows-exe
-        path: build/windows/x64/runner/Release/teknetv.exe
+        name: teknetv-windows-portable
+        path: teknetv-windows-portable.zip
         retention-days: 30
 
   build-android:

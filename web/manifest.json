@@ -1,6 +1,6 @@
 {
-    "name": "teknetv",
-    "short_name": "teknetv",
+    "name": "tekneci maç izletir",
+    "short_name": "tekneci maç izletir",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#000000",

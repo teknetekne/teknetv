@@ -445,6 +445,103 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     }
   }
 
+  Widget _buildLoadingControls() {
+    return Positioned(
+      bottom: 8,
+      left: 0,
+      right: 0,
+      child: SafeArea(
+        bottom: false,
+        left: true,
+        right: true,
+        child: Builder(
+          builder: (context) {
+            final double width = MediaQuery.of(context).size.width;
+            final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
+            return Padding(
+              padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
+              child: Row(
+                children: [
+                  // Play/Pause (leftmost)
+                  _buildControlButton(
+                    index: 0,
+                    icon: Icons.play_arrow,
+                    onPressed: () {
+                      // Loading sırasında play/pause çalışmaz
+                    },
+                    heroTag: "loading_play_pause",
+                  ),
+                  const SizedBox(width: 8),
+                  // Refresh (next to pause)
+                  _buildControlButton(
+                    index: 1,
+                    icon: Icons.refresh,
+                    onPressed: _refreshAll,
+                    heroTag: "loading_refresh",
+                  ),
+                  const SizedBox(width: 8),
+                  // Prev channel
+                  _buildControlButton(
+                    index: 2,
+                    icon: Icons.skip_previous,
+                    onPressed: _goPrevChannel,
+                    heroTag: "loading_prev",
+                  ),
+                  const SizedBox(width: 8),
+                  // Next channel
+                  _buildControlButton(
+                    index: 3,
+                    icon: Icons.skip_next,
+                    onPressed: _goNextChannel,
+                    heroTag: "loading_next",
+                  ),
+                  const Spacer(),
+                  // Channel list (far right)
+                  _buildControlButton(
+                    index: 4,
+                    icon: Icons.list,
+                    onPressed: () {
+                      setState(() {
+                        _isChannelListOpen = !_isChannelListOpen;
+                      });
+                      if (_isChannelListOpen) {
+                        setState(() {
+                          _showUiOverlays = true;
+                        });
+                      } else {
+                        _scheduleHideOverlays();
+                      }
+                    },
+                    heroTag: "loading_toggle_list",
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildControlButton({
+    required int index,
+    required IconData icon,
+    required VoidCallback? onPressed,
+    required String heroTag,
+  }) {
+    final isFocused = _focusedControlIndex == index;
+    return FloatingActionButton.small(
+      heroTag: heroTag,
+      elevation: 0,
+      backgroundColor: isFocused ? Colors.yellow : null,
+      onPressed: onPressed,
+      child: Icon(
+        icon,
+        color: isFocused ? const Color(0xFFA855F7) : Colors.white70,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Focus(
@@ -455,18 +552,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         return KeyEventResult.handled;
       },
       child: Scaffold(
-      body: _isLoading
-          ? const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(),
-                  SizedBox(height: 16),
-                  Text('Loading channels...', style: TextStyle(fontSize: 16)),
-                ],
-              ),
-            )
-          : Stack(
+      body: Stack(
               children: [
                 // Fullscreen video background
                 Positioned.fill(
@@ -486,15 +572,22 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                       child: Container(
                     color: Colors.black,
                     child: _currentChannel == null || _isPlayerLoading
-                        ? const Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                CircularProgressIndicator(),
-                                SizedBox(height: 8),
-                                Text('Loading channel...', style: TextStyle(color: Colors.white)),
-                              ],
-                            ),
+                        ? Stack(
+                            children: [
+                              const Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    CircularProgressIndicator(),
+                                    SizedBox(height: 8),
+                                    Text('Loading channel...', style: TextStyle(color: Colors.white)),
+                                  ],
+                                ),
+                              ),
+                              // Loading sırasında sadece butonları göster (video player değil)
+                              if (_currentChannel != null)
+                                _buildLoadingControls(),
+                            ],
                           )
                         : PlayerScreen(
                             key: _playerKey,
@@ -527,7 +620,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                 ),
 
                 // Top-left watermark/title (auto-hide, responsive)
-                if (_showUiOverlays)
+                if (_showUiOverlays || _isPlayerLoading)
                   Positioned(
                     top: 12,
                     left: 12,
@@ -672,6 +765,31 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             ),
                           );
                         },
+                      ),
+                    ),
+                  ),
+
+                // Loading overlay (when channels are being loaded)
+                if (_isLoading)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withValues(alpha: 0.8),
+                      child: const Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            CircularProgressIndicator(color: Colors.white),
+                            SizedBox(height: 16),
+                            Text(
+                              'Loading channels...', 
+                              style: TextStyle(
+                                fontSize: 16, 
+                                color: Colors.white,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -831,96 +949,98 @@ class _PlayerScreenState extends State<PlayerScreen> {
   Widget build(BuildContext context) {
     return Container(
         width: double.infinity,
-        height: 200,
+        height: _isInitialized ? 200 : double.infinity,
         color: Colors.black,
-        child: _isInitialized
-            ? Stack(
-                children: [
-                  Center(
+        child: Stack(
+          children: [
+            // Video player or loading indicator
+            _isInitialized
+                ? Center(
                     child: _controller != null && _isInitialized
                         ? AspectRatio(
                             aspectRatio: _controller!.value.aspectRatio,
                             child: VideoPlayer(_controller!),
                           )
                         : const CircularProgressIndicator(),
-                  ),
-                  // Controls overlay
-                if (widget.showControls)
-                  Positioned(
-                    bottom: 8,
-                    left: 0,
-                    right: 0,
-                    child: SafeArea(
-                      bottom: false,
-                      left: true,
-                      right: true,
-                      child: Builder(
-                        builder: (context) {
-                          final double width = MediaQuery.of(context).size.width;
-                          final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
-                          return Padding(
-                            padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
-                            child: Row(
-                                children: [
-                                  // Play/Pause (leftmost)
-                                  _buildControlButton(
-                                    index: 0,
-                                    icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
-                                    onPressed: () {
-                                      if (_controller != null) {
-                                        setState(() {
-                                          if (_controller!.value.isPlaying) {
-                                            _controller!.pause();
-                                          } else {
-                                            _controller!.play();
-                                          }
-                                        });
+                  )
+                : const Center(child: CircularProgressIndicator()),
+            
+            // Controls overlay - always show when showControls is true or when not initialized
+            if (widget.showControls || !_isInitialized)
+              Positioned(
+                bottom: 8,
+                left: 0,
+                right: 0,
+                child: SafeArea(
+                  bottom: false,
+                  left: true,
+                  right: true,
+                  child: Builder(
+                    builder: (context) {
+                      final double width = MediaQuery.of(context).size.width;
+                      final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
+                      return Padding(
+                        padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
+                        child: Row(
+                            children: [
+                              // Play/Pause (leftmost)
+                              _buildControlButton(
+                                index: 0,
+                                icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
+                                onPressed: () {
+                                  if (_controller != null) {
+                                    setState(() {
+                                      if (_controller!.value.isPlaying) {
+                                        _controller!.pause();
+                                      } else {
+                                        _controller!.play();
                                       }
-                                    },
-                                    heroTag: "embedded_play_pause",
-                                  ),
-                                  const SizedBox(width: 8),
-                        // Refresh (next to pause)
-                                  _buildControlButton(
-                                    index: 1,
-                                    icon: Icons.refresh,
-                                    onPressed: widget.onRefresh,
-                                    heroTag: "embedded_refresh",
-                                  ),
-                                  const SizedBox(width: 8),
-                        // Prev channel
-                                  _buildControlButton(
-                                    index: 2,
-                                    icon: Icons.skip_previous,
-                                    onPressed: widget.onPrevChannel,
-                                    heroTag: "embedded_prev",
-                                  ),
-                                  const SizedBox(width: 8),
-                        // Next channel
-                                  _buildControlButton(
-                                    index: 3,
-                                    icon: Icons.skip_next,
-                                    onPressed: widget.onNextChannel,
-                                    heroTag: "embedded_next",
-                                  ),
-                        const Spacer(),
-                        // Channel list (far right)
-                                  _buildControlButton(
-                                    index: 4,
-                                    icon: Icons.list,
-                                    onPressed: widget.onToggleChannelList,
-                                    heroTag: "embedded_toggle_list",
-                                  ),
-                                ],
+                                    });
+                                  }
+                                },
+                                heroTag: "embedded_play_pause",
                               ),
-                          );
-                        },
-                      ),
-                    ),
+                              const SizedBox(width: 8),
+                    // Refresh (next to pause)
+                              _buildControlButton(
+                                index: 1,
+                                icon: Icons.refresh,
+                                onPressed: widget.onRefresh,
+                                heroTag: "embedded_refresh",
+                              ),
+                              const SizedBox(width: 8),
+                    // Prev channel
+                              _buildControlButton(
+                                index: 2,
+                                icon: Icons.skip_previous,
+                                onPressed: widget.onPrevChannel,
+                                heroTag: "embedded_prev",
+                              ),
+                              const SizedBox(width: 8),
+                    // Next channel
+                              _buildControlButton(
+                                index: 3,
+                                icon: Icons.skip_next,
+                                onPressed: widget.onNextChannel,
+                                heroTag: "embedded_next",
+                              ),
+                    const Spacer(),
+                    // Channel list (far right)
+                              _buildControlButton(
+                                index: 4,
+                                icon: Icons.list,
+                                onPressed: widget.onToggleChannelList,
+                                heroTag: "embedded_toggle_list",
+                              ),
+                            ],
+                          ),
+                      );
+                    },
                   ),
-                ],
-              )
-            : const Center(child: CircularProgressIndicator()),
+                ),
+              ),
+          ],
+        ),
       );
   }
 }

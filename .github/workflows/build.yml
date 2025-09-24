@@ -32,6 +32,40 @@ jobs:
     - name: Build Windows
       run: flutter build windows --release --verbose
     
+    - name: Copy ICU data file if missing
+      shell: pwsh
+      run: |
+        $bundlePath = "build/windows/x64/runner/Release"
+        $icuFile = "$bundlePath/icudtl.dat"
+        
+        if (-not (Test-Path $icuFile)) {
+          Write-Host "ICU data file missing, attempting to copy from Flutter SDK..."
+          
+          # Try to find icudtl.dat in Flutter SDK
+          $flutterSdk = (flutter doctor -v | Select-String "Flutter version" | ForEach-Object { $_.Line.Split(" ")[2] })
+          $possiblePaths = @(
+            "C:\flutter\bin\cache\artifacts\engine\windows-x64\icudtl.dat",
+            "$env:FLUTTER_ROOT\bin\cache\artifacts\engine\windows-x64\icudtl.dat",
+            "$env:LOCALAPPDATA\flutter\bin\cache\artifacts\engine\windows-x64\icudtl.dat"
+          )
+          
+          $found = $false
+          foreach ($path in $possiblePaths) {
+            if (Test-Path $path) {
+              Copy-Item $path $icuFile
+              Write-Host "Copied ICU data file from: $path"
+              $found = $true
+              break
+            }
+          }
+          
+          if (-not $found) {
+            Write-Warning "Could not find ICU data file in Flutter SDK"
+          }
+        } else {
+          Write-Host "ICU data file already exists: $icuFile"
+        }
+    
     - name: Verify Windows Build
       shell: pwsh
       run: |
@@ -52,6 +86,12 @@ jobs:
         # Check if assets exist
         if (-not (Test-Path "$bundlePath/data/flutter_assets")) {
           Write-Error "Flutter assets not found: $bundlePath/data/flutter_assets"
+          exit 1
+        }
+        
+        # Check if ICU data file exists
+        if (-not (Test-Path "$bundlePath/icudtl.dat")) {
+          Write-Error "ICU data file not found: $bundlePath/icudtl.dat"
           exit 1
         }
         

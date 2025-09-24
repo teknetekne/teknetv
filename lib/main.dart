@@ -41,6 +41,13 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   bool _isChannelListOpen = false;
   bool _showUiOverlays = true;
   Timer? _uiHideTimer;
+  
+  // TV Navigation state
+  int _focusedControlIndex = 0; // 0: play/pause, 1: refresh, 2: prev, 3: next, 4: channel list
+  int _focusedChannelIndex = 0; // For channel list navigation
+  final List<String> _controlIds = ['play_pause', 'refresh', 'prev', 'next', 'channel_list'];
+  final GlobalKey<_PlayerScreenState> _playerKey = GlobalKey<_PlayerScreenState>();
+  final ScrollController _channelListScrollController = ScrollController();
 
   @override
   void initState() {
@@ -52,6 +59,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   void dispose() {
     _uiHideTimer?.cancel();
     _focusNode.dispose();
+    _channelListScrollController.dispose();
     super.dispose();
   }
 
@@ -288,12 +296,160 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     _scheduleHideOverlays();
   }
 
+  // TV Navigation methods
+  void _handleKeyEvent(KeyEvent event) {
+    if (event is KeyDownEvent) {
+      if (_isChannelListOpen) {
+        _handleChannelListNavigation(event);
+      } else {
+        _handleMainNavigation(event);
+      }
+    }
+  }
+
+  void _handleMainNavigation(KeyDownEvent event) {
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.arrowLeft:
+        setState(() {
+          _focusedControlIndex = (_focusedControlIndex - 1 + _controlIds.length) % _controlIds.length;
+          _showUiOverlays = true;
+        });
+        _scheduleHideOverlays();
+        break;
+      case LogicalKeyboardKey.arrowRight:
+        setState(() {
+          _focusedControlIndex = (_focusedControlIndex + 1) % _controlIds.length;
+          _showUiOverlays = true;
+        });
+        _scheduleHideOverlays();
+        break;
+      case LogicalKeyboardKey.select:
+      case LogicalKeyboardKey.enter:
+        _executeFocusedControl();
+        break;
+      case LogicalKeyboardKey.escape:
+        setState(() {
+          _showUiOverlays = !_showUiOverlays;
+        });
+        if (_showUiOverlays) {
+          _scheduleHideOverlays();
+        }
+        break;
+      case LogicalKeyboardKey.pageUp:
+      case LogicalKeyboardKey.audioVolumeUp:
+        // CH+ tuşu - sonraki kanal
+        _goNextChannel();
+        break;
+      case LogicalKeyboardKey.pageDown:
+      case LogicalKeyboardKey.audioVolumeDown:
+        // CH- tuşu - önceki kanal
+        _goPrevChannel();
+        break;
+    }
+  }
+
+  void _handleChannelListNavigation(KeyDownEvent event) {
+    switch (event.logicalKey) {
+      case LogicalKeyboardKey.arrowUp:
+        setState(() {
+          _focusedChannelIndex = (_focusedChannelIndex - 1 + channels.length) % channels.length;
+        });
+        _scrollToFocusedChannel();
+        break;
+      case LogicalKeyboardKey.arrowDown:
+        setState(() {
+          _focusedChannelIndex = (_focusedChannelIndex + 1) % channels.length;
+        });
+        _scrollToFocusedChannel();
+        break;
+      case LogicalKeyboardKey.select:
+      case LogicalKeyboardKey.enter:
+        if (_focusedChannelIndex < channels.length) {
+          _setCurrentChannel(channels[_focusedChannelIndex]);
+          // Kanal listesi açık kalsın, sadece UI overlay'i gizle
+          _scheduleHideOverlays();
+        }
+        break;
+      case LogicalKeyboardKey.escape:
+        setState(() {
+          _isChannelListOpen = false;
+        });
+        _scheduleHideOverlays();
+        break;
+    }
+  }
+
+  void _executeFocusedControl() {
+    switch (_controlIds[_focusedControlIndex]) {
+      case 'play_pause':
+        // Play/pause logic will be handled by calling PlayerScreen method
+        _playerKey.currentState?.togglePlayPause();
+        break;
+      case 'refresh':
+        _refreshAll();
+        break;
+      case 'prev':
+        _goPrevChannel();
+        break;
+      case 'next':
+        _goNextChannel();
+        break;
+      case 'channel_list':
+        setState(() {
+          _isChannelListOpen = !_isChannelListOpen;
+          if (_isChannelListOpen) {
+            _focusedChannelIndex = channels.indexWhere(
+              (c) => _currentChannel != null && c['url'] == _currentChannel!['url']
+            );
+            if (_focusedChannelIndex == -1) _focusedChannelIndex = 0;
+          }
+        });
+        if (_isChannelListOpen) {
+          setState(() {
+            _showUiOverlays = true;
+          });
+        } else {
+          _scheduleHideOverlays();
+        }
+        break;
+    }
+  }
+
+  void _scrollToFocusedChannel() {
+    if (_channelListScrollController.hasClients) {
+      const double itemHeight = 50.0; // Her kanal item'ının yüksekliği
+      final double targetOffset = _focusedChannelIndex * itemHeight;
+      final double maxScrollExtent = _channelListScrollController.position.maxScrollExtent;
+      final double viewportHeight = _channelListScrollController.position.viewportDimension;
+      
+      // Eğer hedef pozisyon viewport'un dışındaysa scroll yap
+      if (targetOffset < _channelListScrollController.offset) {
+        // Yukarı scroll
+        _channelListScrollController.animateTo(
+          targetOffset,
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+        );
+      } else if (targetOffset + itemHeight > _channelListScrollController.offset + viewportHeight - 60) {
+        // Aşağı scroll - alt padding için 60px ekstra alan bırak
+        _channelListScrollController.animateTo(
+          (targetOffset + itemHeight - viewportHeight + 60).clamp(0.0, maxScrollExtent),
+          duration: const Duration(milliseconds: 200),
+          curve: Curves.easeInOut,
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
-      onKeyEvent: (node, event) => KeyEventResult.ignored,
+      onKeyEvent: (node, event) {
+        _handleKeyEvent(event);
+        return KeyEventResult.handled;
+      },
       child: Scaffold(
       body: _isLoading
           ? const Center(
@@ -337,6 +493,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             ),
                           )
                         : PlayerScreen(
+                            key: _playerKey,
                             url: _currentChannel!['url'],
                             headers: _currentChannel!['headers'],
                             onRefresh: _refreshAll,
@@ -355,6 +512,10 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             showControls: _showUiOverlays,
                             onPrevChannel: _goPrevChannel,
                             onNextChannel: _goNextChannel,
+                            focusedControlIndex: _focusedControlIndex,
+                            onPlayPause: () {
+                              // This will be handled by the player screen itself
+                            },
                           ),
                       ),
                     ),
@@ -441,7 +602,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                     child: Container(
                       color: Colors.black.withValues(alpha: 0.8),
                       child: ListView.separated(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                        controller: _channelListScrollController,
+                        padding: const EdgeInsets.fromLTRB(8, 6, 8, 60),
                         physics: const BouncingScrollPhysics(),
                         itemCount: channels.length,
                         separatorBuilder: (context, index) => const Divider(
@@ -452,16 +614,23 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                         itemBuilder: (context, index) {
                           final channel = channels[index];
                           final isCurrentChannel = _currentChannel != null && _currentChannel!['url'] == channel['url'];
+                          final isFocused = _focusedChannelIndex == index;
                           return SizedBox(
                             height: 50,
                             child: MouseRegion(
                               cursor: SystemMouseCursors.click,
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: isCurrentChannel ? const Color(0x33A855F7) : null, // light purple bg
+                                  color: isFocused 
+                                    ? Colors.white.withValues(alpha: 0.2)
+                                    : isCurrentChannel ? const Color(0x33A855F7) : null,
                                   border: Border(
                                     left: BorderSide(
                                       color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.transparent,
+                                      width: 3,
+                                    ),
+                                    right: BorderSide(
+                                      color: isFocused ? Colors.white : Colors.transparent,
                                       width: 3,
                                     ),
                                   ),
@@ -471,6 +640,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                                     child: InkWell(
                                       onTap: () {
                                         _setCurrentChannel(channel);
+                                        // Kanal listesi açık kalsın, sadece UI overlay'i gizle
                                         _scheduleHideOverlays();
                                       },
                                       hoverColor: Colors.white10,
@@ -485,7 +655,9 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                                             softWrap: false,
                                             style: TextStyle(
                                               fontWeight: FontWeight.w600,
-                                              color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
+                                              color: isFocused 
+                                                ? Colors.white
+                                                : isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
                                             ),
                                           ),
                                         ),
@@ -514,6 +686,8 @@ class PlayerScreen extends StatefulWidget {
   final bool showControls;
   final VoidCallback? onPrevChannel;
   final VoidCallback? onNextChannel;
+  final int focusedControlIndex;
+  final VoidCallback? onPlayPause;
 
   const PlayerScreen({
     super.key, 
@@ -524,6 +698,8 @@ class PlayerScreen extends StatefulWidget {
     this.showControls = false,
     this.onPrevChannel,
     this.onNextChannel,
+    required this.focusedControlIndex,
+    this.onPlayPause,
   });
 
   @override
@@ -616,6 +792,37 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.dispose();
   }
 
+  void togglePlayPause() {
+    if (_controller != null) {
+      setState(() {
+        if (_controller!.value.isPlaying) {
+          _controller!.pause();
+        } else {
+          _controller!.play();
+        }
+      });
+    }
+  }
+
+  Widget _buildControlButton({
+    required int index,
+    required IconData icon,
+    required VoidCallback? onPressed,
+    required String heroTag,
+  }) {
+    final isFocused = widget.focusedControlIndex == index;
+    return FloatingActionButton.small(
+      heroTag: heroTag,
+      elevation: 0,
+      backgroundColor: isFocused ? Colors.yellow : null,
+      onPressed: onPressed,
+      child: Icon(
+        icon,
+        color: isFocused ? const Color(0xFFA855F7) : Colors.white70,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -652,9 +859,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
                             child: Row(
                                 children: [
                                   // Play/Pause (leftmost)
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_play_pause",
-                                    elevation: 0,
+                                  _buildControlButton(
+                                    index: 0,
+                                    icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
                                     onPressed: () {
                                       if (_controller != null) {
                                         setState(() {
@@ -666,39 +873,39 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                         });
                                       }
                                     },
-                                    child: Icon(_controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow),
-                        ),
+                                    heroTag: "embedded_play_pause",
+                                  ),
                                   const SizedBox(width: 8),
                         // Refresh (next to pause)
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_refresh",
-                                    elevation: 0,
+                                  _buildControlButton(
+                                    index: 1,
+                                    icon: Icons.refresh,
                                     onPressed: widget.onRefresh,
-                                    child: const Icon(Icons.refresh),
-                        ),
+                                    heroTag: "embedded_refresh",
+                                  ),
                                   const SizedBox(width: 8),
                         // Prev channel
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_prev",
-                                    elevation: 0,
+                                  _buildControlButton(
+                                    index: 2,
+                                    icon: Icons.skip_previous,
                                     onPressed: widget.onPrevChannel,
-                                    child: const Icon(Icons.skip_previous),
-                        ),
+                                    heroTag: "embedded_prev",
+                                  ),
                                   const SizedBox(width: 8),
                         // Next channel
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_next",
-                                    elevation: 0,
+                                  _buildControlButton(
+                                    index: 3,
+                                    icon: Icons.skip_next,
                                     onPressed: widget.onNextChannel,
-                                    child: const Icon(Icons.skip_next),
-                        ),
+                                    heroTag: "embedded_next",
+                                  ),
                         const Spacer(),
                         // Channel list (far right)
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_toggle_list",
-                                    elevation: 0,
+                                  _buildControlButton(
+                                    index: 4,
+                                    icon: Icons.list,
                                     onPressed: widget.onToggleChannelList,
-                                    child: const Icon(Icons.list),
+                                    heroTag: "embedded_toggle_list",
                                   ),
                                 ],
                               ),

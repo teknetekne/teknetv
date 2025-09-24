@@ -1,4 +1,4 @@
-name: Build All Platforms
+name: Build Windows
 
 on:
   push:
@@ -20,8 +20,14 @@ jobs:
         channel: 'stable'
         cache: true
     
+    - name: Setup Visual Studio Build Tools
+      uses: microsoft/setup-msbuild@v1
+    
     - name: Get dependencies
       run: flutter pub get
+    
+    - name: Generate app icons
+      run: flutter pub run flutter_launcher_icons:main
     
     - name: Build Windows
       run: flutter build windows --release --verbose
@@ -60,186 +66,29 @@ jobs:
       run: |
         $bundlePath = "build/windows/x64/runner/Release"
         $zipPath = "teknetv-windows-portable.zip"
-        
-        # Remove existing ZIP
+
         if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-        
-        # Verify required files exist
+
         $requiredFiles = @(
           "$bundlePath/teknetv.exe",
           "$bundlePath/flutter_windows.dll",
+          "$bundlePath/icudtl.dat",
           "$bundlePath/data/flutter_assets"
         )
-        
+
         foreach ($file in $requiredFiles) {
           if (-not (Test-Path $file)) {
             Write-Error "Required file missing: $file"
             exit 1
           }
         }
-        
-        # Create ZIP with all contents
-        Write-Host "Creating ZIP with contents from: $bundlePath"
-        Get-ChildItem -Path $bundlePath -Recurse | ForEach-Object { Write-Host "Including: $($_.FullName)" }
-        
-        Compress-Archive -Path "$bundlePath/*" -DestinationPath $zipPath -CompressionLevel Optimal -Force
-        
-        # Verify ZIP was created
-        if (Test-Path $zipPath) {
-          $zipSize = (Get-Item $zipPath).Length
-          Write-Host "ZIP created successfully. Size: $zipSize bytes"
-        } else {
-          Write-Error "Failed to create ZIP file"
-          exit 1
-        }
+
+        Write-Host "Creating ZIP from: $bundlePath"
+        Compress-Archive -Path "$bundlePath\*" -DestinationPath $zipPath -CompressionLevel Optimal -Force
 
     - name: Upload Windows portable ZIP
       uses: actions/upload-artifact@v4
       with:
         name: teknetv-windows-portable
         path: teknetv-windows-portable.zip
-        retention-days: 30
-
-  build-android:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.35.4'
-        channel: 'stable'
-        cache: true
-    
-    - name: Setup Java
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'zulu'
-        java-version: '17'
-    
-    - name: Get dependencies
-      run: flutter pub get
-    
-    - name: Build Android APK
-      run: flutter build apk --release
-    
-    - name: Upload Android APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: teknetv-android-apk
-        path: build/app/outputs/flutter-apk/app-release.apk
-        retention-days: 30
-
-  build-web:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.35.4'
-        channel: 'stable'
-        cache: true
-    
-    - name: Get dependencies
-      run: flutter pub get
-    
-    - name: Build Web
-      run: flutter build web --release
-    
-    - name: Upload Web Build
-      uses: actions/upload-artifact@v4
-      with:
-        name: teknetv-web-build
-        path: build/web/
-        retention-days: 30
-
-  build-macos:
-    runs-on: macos-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.35.4'
-        channel: 'stable'
-        cache: true
-    
-    - name: Get dependencies
-      run: flutter pub get
-    
-    - name: Build macOS
-      run: flutter build macos --release --verbose
-    
-    - name: Verify macOS Build
-      run: |
-        BUNDLE_PATH="build/macos/Build/Products/Release"
-        
-        # Check if main app bundle exists
-        if [ ! -d "$BUNDLE_PATH/TekneTV.app" ]; then
-          echo "❌ Main app bundle not found: $BUNDLE_PATH/TekneTV.app"
-          exit 1
-        fi
-        
-        # Check if executable exists inside bundle
-        if [ ! -f "$BUNDLE_PATH/TekneTV.app/Contents/MacOS/TekneTV" ]; then
-          echo "❌ Main executable not found: $BUNDLE_PATH/TekneTV.app/Contents/MacOS/TekneTV"
-          exit 1
-        fi
-        
-        # Check if Flutter framework exists
-        if [ ! -d "$BUNDLE_PATH/TekneTV.app/Contents/Frameworks" ]; then
-          echo "❌ Frameworks directory not found"
-          exit 1
-        fi
-        
-        # Check if assets exist
-        if [ ! -d "$BUNDLE_PATH/TekneTV.app/Contents/Frameworks/App.framework/Resources/flutter_assets" ]; then
-          echo "❌ Flutter assets not found"
-          exit 1
-        fi
-        
-        # List all files in build directory
-        echo "📁 Build directory contents:"
-        find "$BUNDLE_PATH" -type f | head -20
-        
-        echo "✅ macOS build verification completed successfully"
-    
-    - name: Create macOS DMG
-      run: |
-        BUNDLE_PATH="build/macos/Build/Products/Release"
-        DMG_PATH="$BUNDLE_PATH/TekneTV.dmg"
-        
-        # Verify app bundle exists before creating DMG
-        if [ ! -d "$BUNDLE_PATH/TekneTV.app" ]; then
-          echo "❌ App bundle not found for DMG creation"
-          exit 1
-        fi
-        
-        # Remove existing DMG
-        if [ -f "$DMG_PATH" ]; then
-          rm "$DMG_PATH"
-        fi
-        
-        # Create DMG
-        cd "$BUNDLE_PATH"
-        hdiutil create -volname "TekneTV" -srcfolder "TekneTV.app" -ov -format UDZO "TekneTV.dmg"
-        
-        # Verify DMG was created
-        if [ -f "$DMG_PATH" ]; then
-          DMG_SIZE=$(stat -f%z "$DMG_PATH")
-          echo "✅ DMG created successfully. Size: $DMG_SIZE bytes"
-        else
-          echo "❌ Failed to create DMG file"
-          exit 1
-        fi
-    
-    - name: Upload macOS DMG
-      uses: actions/upload-artifact@v4
-      with:
-        name: teknetv-macos-dmg
-        path: build/macos/Build/Products/Release/TekneTV.dmg
         retention-days: 30

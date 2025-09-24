@@ -328,6 +328,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         _executeFocusedControl();
         break;
       case LogicalKeyboardKey.escape:
+      case LogicalKeyboardKey.goBack:
+      case LogicalKeyboardKey.backspace:
         setState(() {
           _showUiOverlays = !_showUiOverlays;
         });
@@ -371,6 +373,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         }
         break;
       case LogicalKeyboardKey.escape:
+      case LogicalKeyboardKey.goBack:
+      case LogicalKeyboardKey.backspace:
         setState(() {
           _isChannelListOpen = false;
         });

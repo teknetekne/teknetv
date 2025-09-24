@@ -45,6 +45,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   final ScrollController _listScrollController = ScrollController();
   int? _focusedListIndex;
   final GlobalKey<_PlayerScreenState> _playerKey = GlobalKey<_PlayerScreenState>();
+  int _focusedControlIndex = 0; // 0:play,1:refresh,2:prev,3:next,4:list
 
   @override
   void initState() {
@@ -308,6 +309,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
             if (!_showUiOverlays) {
               setState(() {
                 _showUiOverlays = true;
+                _focusedControlIndex = 0;
               });
             }
             _scheduleHideOverlays();
@@ -370,15 +372,29 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
             }
             // Allow left/right to bubble when list is open
           } else {
-            // Global playback/channel shortcuts when list is closed
+            // DPAD navigation across bottom controls when list is closed
             if (key == LogicalKeyboardKey.arrowLeft) {
-              _goPrevChannel();
-              revealOverlaysAndReschedule();
+              setState(() {
+                _showUiOverlays = true;
+                if (_focusedControlIndex > 0) {
+                  _focusedControlIndex -= 1;
+                } else {
+                  _focusedControlIndex = 0;
+                }
+              });
+              _scheduleHideOverlays();
               return KeyEventResult.handled;
             }
             if (key == LogicalKeyboardKey.arrowRight) {
-              _goNextChannel();
-              revealOverlaysAndReschedule();
+              setState(() {
+                _showUiOverlays = true;
+                if (_focusedControlIndex < 4) {
+                  _focusedControlIndex += 1;
+                } else {
+                  _focusedControlIndex = 4;
+                }
+              });
+              _scheduleHideOverlays();
               return KeyEventResult.handled;
             }
             if (key == LogicalKeyboardKey.mediaTrackPrevious) {
@@ -397,15 +413,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
               return KeyEventResult.handled;
             }
             if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.space) {
-              // Toggle overlays or play/pause if already visible
-              if (_showUiOverlays) {
-                _playerTogglePlayPause();
-              } else {
-                setState(() {
-                  _showUiOverlays = true;
-                });
-              }
-              _scheduleHideOverlays();
+              // Activate focused control button
+              _activateFocusedControl();
               return KeyEventResult.handled;
             }
             if (key == LogicalKeyboardKey.contextMenu || key == LogicalKeyboardKey.keyL) {
@@ -812,58 +821,53 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           return Padding(
                             padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
                             child: Row(
-                                children: [
-                                  // Play/Pause (leftmost)
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_play_pause",
-                                    elevation: 0,
-                                    onPressed: () {
-                                      if (_controller != null) {
-                                        setState(() {
-                                          if (_controller!.value.isPlaying) {
-                                            _controller!.pause();
-                                          } else {
-                                            _controller!.play();
-                                          }
-                                        });
-                                      }
-                                    },
-                                    child: Icon(_controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow),
-                        ),
-                                  const SizedBox(width: 8),
-                        // Refresh (next to pause)
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_refresh",
-                                    elevation: 0,
-                                    onPressed: widget.onRefresh,
-                                    child: const Icon(Icons.refresh),
-                        ),
-                                  const SizedBox(width: 8),
-                        // Prev channel
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_prev",
-                                    elevation: 0,
-                                    onPressed: widget.onPrevChannel,
-                                    child: const Icon(Icons.skip_previous),
-                        ),
-                                  const SizedBox(width: 8),
-                        // Next channel
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_next",
-                                    elevation: 0,
-                                    onPressed: widget.onNextChannel,
-                                    child: const Icon(Icons.skip_next),
-                        ),
-                        const Spacer(),
-                        // Channel list (far right)
-                                  FloatingActionButton.small(
-                          heroTag: "embedded_toggle_list",
-                                    elevation: 0,
-                                    onPressed: widget.onToggleChannelList,
-                                    child: const Icon(Icons.list),
-                                  ),
-                                ],
-                              ),
+                              children: [
+                                _ControlButton(
+                                  isFocused: context.findAncestorStateOfType<_ChannelListScreenState>()?._focusedControlIndex == 0,
+                                  heroTag: "embedded_play_pause",
+                                  icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
+                                  onPressed: () {
+                                    if (_controller != null) {
+                                      setState(() {
+                                        if (_controller!.value.isPlaying) {
+                                          _controller!.pause();
+                                        } else {
+                                          _controller!.play();
+                                        }
+                                      });
+                                    }
+                                  },
+                                ),
+                                const SizedBox(width: 8),
+                                _ControlButton(
+                                  isFocused: context.findAncestorStateOfType<_ChannelListScreenState>()?._focusedControlIndex == 1,
+                                  heroTag: "embedded_refresh",
+                                  icon: Icons.refresh,
+                                  onPressed: widget.onRefresh,
+                                ),
+                                const SizedBox(width: 8),
+                                _ControlButton(
+                                  isFocused: context.findAncestorStateOfType<_ChannelListScreenState>()?._focusedControlIndex == 2,
+                                  heroTag: "embedded_prev",
+                                  icon: Icons.skip_previous,
+                                  onPressed: widget.onPrevChannel,
+                                ),
+                                const SizedBox(width: 8),
+                                _ControlButton(
+                                  isFocused: context.findAncestorStateOfType<_ChannelListScreenState>()?._focusedControlIndex == 3,
+                                  heroTag: "embedded_next",
+                                  icon: Icons.skip_next,
+                                  onPressed: widget.onNextChannel,
+                                ),
+                                const Spacer(),
+                                _ControlButton(
+                                  isFocused: context.findAncestorStateOfType<_ChannelListScreenState>()?._focusedControlIndex == 4,
+                                  heroTag: "embedded_toggle_list",
+                                  icon: Icons.list,
+                                  onPressed: widget.onToggleChannelList,
+                                ),
+                              ],
+                            ),
                           );
                         },
                       ),
@@ -898,6 +902,78 @@ extension _ChannelListScroll on _ChannelListScreenState {
 
   void _playerTogglePlayPause() {
     _playerKey.currentState?.togglePlayPause();
+  }
+
+  void _activateFocusedControl() {
+    revealControls() {
+      setState(() {
+        _showUiOverlays = true;
+      });
+      _scheduleHideOverlays();
+    }
+    switch (_focusedControlIndex) {
+      case 0:
+        _playerTogglePlayPause();
+        revealControls();
+        break;
+      case 1:
+        unawaited(_refreshAll());
+        revealControls();
+        break;
+      case 2:
+        _goPrevChannel();
+        revealControls();
+        break;
+      case 3:
+        _goNextChannel();
+        revealControls();
+        break;
+      case 4:
+        setState(() {
+          _isChannelListOpen = true;
+        });
+        if (_currentChannel != null) {
+          final int idx = channels.indexWhere((c) => c['url'] == _currentChannel!['url']);
+          _focusedListIndex = idx >= 0 ? idx : 0;
+        } else {
+          _focusedListIndex = 0;
+        }
+        _ensureListItemVisible();
+        revealControls();
+        break;
+    }
+  }
+}
+
+class _ControlButton extends StatelessWidget {
+  final bool isFocused;
+  final String heroTag;
+  final IconData icon;
+  final VoidCallback? onPressed;
+
+  const _ControlButton({
+    super.key,
+    required this.isFocused,
+    required this.heroTag,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container
+    (
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: isFocused ? Border.all(color: Colors.white, width: 2) : null,
+      ),
+      child: FloatingActionButton.small(
+        heroTag: heroTag,
+        elevation: 0,
+        onPressed: onPressed,
+        child: Icon(icon),
+      ),
+    );
   }
 }
 

@@ -35,12 +35,13 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   bool _isLoading = true;
   Map<String, dynamic>? _currentChannel;
   bool _isPlayerLoading = false;
-  Timer? _refreshTimer;
+  // Removed unused periodic refresh timer
   String? _cachedM3UData;
   final FocusNode _focusNode = FocusNode();
   bool _isChannelListOpen = false;
   bool _showUiOverlays = true;
   Timer? _uiHideTimer;
+  bool _listJustOpened = false;
 
   @override
   void initState() {
@@ -50,7 +51,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 
   @override
   void dispose() {
-    _refreshTimer?.cancel();
     _uiHideTimer?.cancel();
     _focusNode.dispose();
     super.dispose();
@@ -296,6 +296,11 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       autofocus: true,
       onKeyEvent: (node, event) {
         if (event is KeyDownEvent) {
+          // Any key activity shows overlays and resets hide timer
+          if (!_showUiOverlays) {
+            setState(() { _showUiOverlays = true; });
+          }
+          _scheduleHideOverlays();
           switch (event.logicalKey) {
             case LogicalKeyboardKey.arrowUp:
               // Let focus system handle D-pad
@@ -367,11 +372,13 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                         : PlayerScreen(
                             url: _currentChannel!['url'],
                             headers: _currentChannel!['headers'],
-                            isEmbedded: true,
                             onRefresh: _refreshAll,
                             onToggleChannelList: () {
                               setState(() {
                                 _isChannelListOpen = !_isChannelListOpen;
+                                if (_isChannelListOpen) {
+                                  _listJustOpened = true;
+                                }
                               });
                               if (_isChannelListOpen) {
                                 setState(() {
@@ -487,6 +494,17 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                               cursor: SystemMouseCursors.click,
                               child: Focus(
                                 canRequestFocus: true,
+                                autofocus: _listJustOpened && isCurrentChannel,
+                                onFocusChange: (has) {
+                                  if (has && _listJustOpened) {
+                                    // reset the flag after first focus lands
+                                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                                      if (mounted) {
+                                        setState(() { _listJustOpened = false; });
+                                      }
+                                    });
+                                  }
+                                },
                                 child: Container(
                                 decoration: BoxDecoration(
                                   color: isCurrentChannel ? const Color(0x33A855F7) : null, // light purple bg
@@ -499,29 +517,46 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                                 ),
                                   child: Material(
                                   color: Colors.transparent,
-                                  child: InkWell(
-                                    onTap: () {
-                                      _setCurrentChannel(channel);
-                                      _scheduleHideOverlays();
-                                    },
-                                    hoverColor: Colors.white10,
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                                      child: Align(
-                                        alignment: Alignment.centerLeft,
-                                        child: Text(
-                                          channel['title'] ?? 'Unknown',
-                                          maxLines: 1,
-                                          overflow: TextOverflow.fade,
-                                          softWrap: false,
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w600,
-                                            color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
+                                    child: Shortcuts(
+                                      shortcuts: <LogicalKeySet, Intent>{
+                                        LogicalKeySet(LogicalKeyboardKey.enter): const ActivateIntent(),
+                                        LogicalKeySet(LogicalKeyboardKey.select): const ActivateIntent(),
+                                      },
+                                      child: Actions(
+                                        actions: <Type, Action<Intent>>{
+                                          ActivateIntent: CallbackAction<ActivateIntent>(
+                                            onInvoke: (intent) {
+                                              _setCurrentChannel(channel);
+                                              _scheduleHideOverlays();
+                                              return null;
+                                            },
+                                          ),
+                                        },
+                                        child: InkWell(
+                                          onTap: () {
+                                            _setCurrentChannel(channel);
+                                            _scheduleHideOverlays();
+                                          },
+                                          hoverColor: Colors.white10,
+                                          child: Padding(
+                                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                                            child: Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                channel['title'] ?? 'Unknown',
+                                                maxLines: 1,
+                                                overflow: TextOverflow.fade,
+                                                softWrap: false,
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.w600,
+                                                  color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
+                                                ),
+                                              ),
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
                                 ),
                                 ),
                               ),
@@ -541,7 +576,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 class PlayerScreen extends StatefulWidget {
   final String url;
   final Map<String, String> headers;
-  final bool isEmbedded;
   final VoidCallback? onRefresh;
   final VoidCallback? onToggleChannelList;
   final bool showControls;
@@ -552,7 +586,6 @@ class PlayerScreen extends StatefulWidget {
     super.key, 
     required this.url, 
     required this.headers,
-    this.isEmbedded = false,
     this.onRefresh,
     this.onToggleChannelList,
     this.showControls = false,
@@ -568,9 +601,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   VideoPlayerController? _controller;
   bool _isInitialized = false;
   bool _isInitializing = false;
-  bool _isFullscreen = false;
   String? _currentUrl;
-  OverlayEntry? _fullscreenOverlay;
 
   @override
   void initState() {
@@ -629,14 +660,12 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _isInitializing = false;
         });
         
-        // Auto-play for embedded player with small delay
-        if (widget.isEmbedded) {
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (mounted && _controller != null) {
-              _controller!.play();
-            }
-          });
-        }
+        // Auto-play with small delay
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted && _controller != null) {
+            _controller!.play();
+          }
+        });
       }
     } catch (e) {
       if (mounted) {
@@ -654,108 +683,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
     super.dispose();
   }
 
-  void _toggleFullscreen() {
-    if (_isFullscreen) {
-      _exitFullscreenOverlay();
-    } else {
-      _enterFullscreenOverlay();
-    }
-  }
-
-  void _enterFullscreenOverlay() {
-    if (_fullscreenOverlay != null) return;
-    setState(() {
-      _isFullscreen = true;
-    });
-    _fullscreenOverlay = OverlayEntry(
-      builder: (context) {
-        return GestureDetector(
-          onTap: () {},
-          child: Container(
-            color: Colors.black,
-            child: SafeArea(
-              child: Stack(
-                children: [
-                  Center(
-                    child: _controller != null && _isInitialized
-                        ? AspectRatio(
-                            aspectRatio: _controller!.value.aspectRatio,
-                            child: VideoPlayer(_controller!),
-                          )
-                        : const CircularProgressIndicator(color: Colors.white),
-                  ),
-                  Positioned(
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0.7),
-                            Colors.transparent,
-                          ],
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
-                            onPressed: _exitFullscreenOverlay,
-                          ),
-                          if (widget.onRefresh != null)
-                            IconButton(
-                              tooltip: 'Yenile',
-                              icon: const Icon(Icons.refresh, color: Colors.white),
-                              onPressed: widget.onRefresh,
-                            ),
-                          const Spacer(),
-                          IconButton(
-                            icon: Icon(
-                              _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
-                              color: Colors.white,
-                            ),
-                            onPressed: () {
-                              if (_controller == null) return;
-                              setState(() {
-                                if (_controller!.value.isPlaying) {
-                                  _controller!.pause();
-                                } else {
-                                  _controller!.play();
-                                }
-                              });
-                            },
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        );
-      },
-    );
-    final overlay = Overlay.of(context);
-    overlay.insert(_fullscreenOverlay!);
-  }
-
-  void _exitFullscreenOverlay() {
-    _fullscreenOverlay?.remove();
-    _fullscreenOverlay = null;
-    setState(() {
-      _isFullscreen = false;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
-    if (widget.isEmbedded) {
-      return Container(
+    return Container(
         width: double.infinity,
         height: 200,
         color: Colors.black,
@@ -773,7 +703,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                   // Controls overlay
                 if (widget.showControls)
                   Positioned(
-                    bottom: 0,
+                    bottom: 8,
                     left: 0,
                     right: 0,
                     child: SafeArea(
@@ -783,12 +713,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
                       child: Builder(
                         builder: (context) {
                           final double width = MediaQuery.of(context).size.width;
-                          final double pad = (width * 0.05).clamp(8.0, 24.0).toDouble();
+                          final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
                           return Padding(
                             padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
                             child: FocusTraversalGroup(
                               policy: OrderedTraversalPolicy(),
-                              child: Row(
+                              child: Shortcuts(
+                                shortcuts: <LogicalKeySet, Intent>{
+                                  LogicalKeySet(LogicalKeyboardKey.arrowLeft): const DirectionalFocusIntent(TraversalDirection.left),
+                                  LogicalKeySet(LogicalKeyboardKey.arrowRight): const DirectionalFocusIntent(TraversalDirection.right),
+                                },
+                                child: Row(
                                 children: [
                         // Play/Pause (leftmost)
                                   _TvFocusableFab(
@@ -807,7 +742,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           elevation: 0,
                                     icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
                         ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 8),
                         // Refresh (next to pause)
                                   _TvFocusableFab(
                           heroTag: "embedded_refresh",
@@ -815,7 +750,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     onActivate: widget.onRefresh,
                                     icon: Icons.refresh,
                         ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 8),
                         // Prev channel
                                   _TvFocusableFab(
                           heroTag: "embedded_prev",
@@ -823,7 +758,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     onActivate: widget.onPrevChannel,
                                     icon: Icons.skip_previous,
                         ),
-                                  const SizedBox(width: 4),
+                                  const SizedBox(width: 8),
                         // Next channel
                                   _TvFocusableFab(
                           heroTag: "embedded_next",
@@ -840,6 +775,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     icon: Icons.list,
                                   ),
                                 ],
+                                ),
                               ),
                             ),
                           );
@@ -851,46 +787,6 @@ class _PlayerScreenState extends State<PlayerScreen> {
               )
             : const Center(child: CircularProgressIndicator()),
       );
-    }
-
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Player'),
-        actions: [
-          IconButton(
-            icon: Icon(_isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen),
-            onPressed: _toggleFullscreen,
-          ),
-        ],
-      ),
-      body: Center(
-        child: _controller != null && _isInitialized
-            ? AspectRatio(
-                aspectRatio: _controller!.value.aspectRatio,
-                child: VideoPlayer(_controller!),
-              )
-            : const CircularProgressIndicator(),
-      ),
-      floatingActionButton: _controller != null && _isInitialized
-          ? FloatingActionButton(
-              heroTag: "main_play_pause",
-              onPressed: () {
-                if (_controller != null) {
-                  setState(() {
-                    if (_controller!.value.isPlaying) {
-                      _controller!.pause();
-                    } else {
-                      _controller!.play();
-                    }
-                  });
-                }
-              },
-              child: Icon(
-                _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
-              ),
-            )
-          : null,
-    );
   }
 }
 
@@ -919,7 +815,10 @@ class _TvFocusableFab extends StatelessWidget {
             elevation: elevation,
             backgroundColor: focused ? Colors.white12 : null,
             onPressed: onActivate,
-            child: Icon(icon),
+            child: Icon(
+              icon,
+              color: focused ? Colors.amber : null, // Focused icon: yellow
+            ),
           );
         },
       ),
@@ -927,217 +826,4 @@ class _TvFocusableFab extends StatelessWidget {
   }
 }
 
-class FullscreenPlayerScreen extends StatefulWidget {
-  final String url;
-  final Map<String, String> headers;
-  final VideoPlayerController? controller;
-  final VoidCallback? onRefresh;
-
-  const FullscreenPlayerScreen({
-    super.key,
-    required this.url,
-    required this.headers,
-    this.controller,
-    this.onRefresh,
-  });
-
-  @override
-  State<FullscreenPlayerScreen> createState() => _FullscreenPlayerScreenState();
-}
-
-class _FullscreenPlayerScreenState extends State<FullscreenPlayerScreen> {
-  VideoPlayerController? _controller;
-  bool _isInitialized = false;
-  bool _showControls = true;
-  bool _isPlaying = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeController();
-    _startHideControlsTimer();
-  }
-
-  Future<void> _initializeController() async {
-    // Use existing controller if available, otherwise create new one
-    if (widget.controller != null && widget.controller!.value.isInitialized) {
-      _controller = widget.controller;
-      setState(() {
-        _isInitialized = true;
-        _isPlaying = _controller!.value.isPlaying;
-      });
-    } else {
-      _controller = VideoPlayerController.networkUrl(
-        Uri.parse(widget.url),
-        httpHeaders: widget.headers,
-        videoPlayerOptions: VideoPlayerOptions(
-          mixWithOthers: true,
-          allowBackgroundPlayback: false,
-        ),
-      );
-
-      try {
-        await _controller!.initialize().timeout(
-          const Duration(seconds: 5),
-          onTimeout: () {
-            throw Exception('Video initialization timeout');
-          },
-        );
-
-        if (mounted) {
-          setState(() {
-            _isInitialized = true;
-            _isPlaying = false;
-          });
-          _controller!.play();
-        }
-      } catch (e) {
-        if (mounted) {
-          setState(() {
-            _isInitialized = false;
-          });
-        }
-      }
-    }
-  }
-
-  void _startHideControlsTimer() {
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted && _showControls) {
-        setState(() {
-          _showControls = false;
-        });
-      }
-    });
-  }
-
-  void _toggleControls() {
-    setState(() {
-      _showControls = !_showControls;
-    });
-    if (_showControls) {
-      _startHideControlsTimer();
-    }
-  }
-
-  void _togglePlayPause() {
-    if (_controller != null) {
-      setState(() {
-        _isPlaying = !_isPlaying;
-      });
-      if (_isPlaying) {
-        _controller!.play();
-      } else {
-        _controller!.pause();
-      }
-    }
-  }
-
-  @override
-  void dispose() {
-    // Don't dispose controller here as it might be shared
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: GestureDetector(
-        onTap: _toggleControls,
-        child: Stack(
-          children: [
-            // Video player
-            Center(
-              child: _controller != null && _isInitialized
-                  ? AspectRatio(
-                      aspectRatio: _controller!.value.aspectRatio,
-                      child: VideoPlayer(_controller!),
-                    )
-                  : const CircularProgressIndicator(color: Colors.white),
-            ),
-            
-            // Top controls
-            if (_showControls)
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.only(
-                    top: 50,
-                    left: 16,
-                    right: 16,
-                    bottom: 16,
-                  ),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0.7),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      if (widget.onRefresh != null)
-                        IconButton(
-                          tooltip: 'Yenile',
-                          icon: const Icon(Icons.refresh, color: Colors.white),
-                          onPressed: widget.onRefresh,
-                        ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.fullscreen_exit, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            
-            // Bottom controls
-            if (_showControls)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.bottomCenter,
-                      end: Alignment.topCenter,
-                        colors: [
-                          Colors.black.withValues(alpha: 0.7),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _isPlaying ? Icons.pause : Icons.play_arrow,
-                          color: Colors.white,
-                          size: 48,
-                        ),
-                        onPressed: _togglePlayPause,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-}
+// Removed old fullscreen page implementation; now fullscreen is same-page overlay

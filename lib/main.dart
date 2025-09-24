@@ -41,6 +41,10 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   bool _isChannelListOpen = false;
   bool _showUiOverlays = true;
   Timer? _uiHideTimer;
+  // TV list navigation and player control
+  final ScrollController _listScrollController = ScrollController();
+  int? _focusedListIndex;
+  final GlobalKey<_PlayerScreenState> _playerKey = GlobalKey<_PlayerScreenState>();
 
   @override
   void initState() {
@@ -51,6 +55,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   @override
   void dispose() {
     _uiHideTimer?.cancel();
+    _listScrollController.dispose();
     _focusNode.dispose();
     super.dispose();
   }
@@ -293,7 +298,144 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     return Focus(
       focusNode: _focusNode,
       autofocus: true,
-      onKeyEvent: (node, event) => KeyEventResult.ignored,
+      onKeyEvent: (node, event) {
+        // Handle Android TV / DPAD and media keys
+        if (event is KeyUpEvent) {
+          // Only act on key up to avoid repeats
+          final key = event.logicalKey;
+
+          void revealOverlaysAndReschedule() {
+            if (!_showUiOverlays) {
+              setState(() {
+                _showUiOverlays = true;
+              });
+            }
+            _scheduleHideOverlays();
+          }
+
+          // Back key handling
+          if (key == LogicalKeyboardKey.goBack || key == LogicalKeyboardKey.escape) {
+            if (_isChannelListOpen) {
+              setState(() {
+                _isChannelListOpen = false;
+              });
+              _scheduleHideOverlays();
+              return KeyEventResult.handled;
+            }
+            // Let system handle actual back navigation otherwise
+            return KeyEventResult.ignored;
+          }
+
+          // If channel list is open, use up/down/select to navigate it
+          if (_isChannelListOpen) {
+            if (key == LogicalKeyboardKey.arrowUp) {
+              if (channels.isNotEmpty) {
+                final int currentIndex = _currentChannel == null
+                    ? 0
+                    : channels.indexWhere((c) => c['url'] == _currentChannel!['url']);
+                final int focusedIndex = (_focusedListIndex ?? (currentIndex >= 0 ? currentIndex : 0)) - 1;
+                setState(() {
+                  _focusedListIndex = focusedIndex < 0 ? 0 : focusedIndex;
+                });
+                _ensureListItemVisible();
+              }
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.arrowDown) {
+              if (channels.isNotEmpty) {
+                final int maxIndex = channels.length - 1;
+                final int currentIndex = _currentChannel == null
+                    ? 0
+                    : channels.indexWhere((c) => c['url'] == _currentChannel!['url']);
+                final int focusedIndex = (_focusedListIndex ?? (currentIndex >= 0 ? currentIndex : 0)) + 1;
+                setState(() {
+                  _focusedListIndex = focusedIndex > maxIndex ? maxIndex : focusedIndex;
+                });
+                _ensureListItemVisible();
+              }
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.space) {
+              if (channels.isNotEmpty) {
+                final int indexToPlay = (_focusedListIndex ?? 0).clamp(0, channels.length - 1);
+                _setCurrentChannel(channels[indexToPlay]);
+              }
+              setState(() {
+                _isChannelListOpen = false;
+              });
+              _scheduleHideOverlays();
+              return KeyEventResult.handled;
+            }
+            // Allow left/right to bubble when list is open
+          } else {
+            // Global playback/channel shortcuts when list is closed
+            if (key == LogicalKeyboardKey.arrowLeft) {
+              _goPrevChannel();
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.arrowRight) {
+              _goNextChannel();
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.mediaTrackPrevious) {
+              _goPrevChannel();
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.mediaTrackNext) {
+              _goNextChannel();
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.mediaPlayPause) {
+              _playerTogglePlayPause();
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.enter || key == LogicalKeyboardKey.select || key == LogicalKeyboardKey.space) {
+              // Toggle overlays or play/pause if already visible
+              if (_showUiOverlays) {
+                _playerTogglePlayPause();
+              } else {
+                setState(() {
+                  _showUiOverlays = true;
+                });
+              }
+              _scheduleHideOverlays();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.contextMenu || key == LogicalKeyboardKey.keyL) {
+              setState(() {
+                _isChannelListOpen = true;
+              });
+              if (_currentChannel != null) {
+                final int idx = channels.indexWhere((c) => c['url'] == _currentChannel!['url']);
+                _focusedListIndex = idx >= 0 ? idx : 0;
+              } else {
+                _focusedListIndex = 0;
+              }
+              _ensureListItemVisible();
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.keyR || key == LogicalKeyboardKey.refresh) {
+              unawaited(_refreshAll());
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+            if (key == LogicalKeyboardKey.arrowUp || key == LogicalKeyboardKey.arrowDown) {
+              // Just show controls briefly on up/down
+              revealOverlaysAndReschedule();
+              return KeyEventResult.handled;
+            }
+          }
+        }
+        return KeyEventResult.ignored;
+      },
       child: Scaffold(
       body: _isLoading
           ? const Center(
@@ -337,6 +479,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             ),
                           )
                         : PlayerScreen(
+                            key: _playerKey,
                             url: _currentChannel!['url'],
                             headers: _currentChannel!['headers'],
                             onRefresh: _refreshAll,
@@ -443,6 +586,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                       child: ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                         physics: const BouncingScrollPhysics(),
+                        controller: _listScrollController,
                         itemCount: channels.length,
                         separatorBuilder: (context, index) => const Divider(
                           color: Colors.white12,
@@ -452,16 +596,21 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                         itemBuilder: (context, index) {
                           final channel = channels[index];
                           final isCurrentChannel = _currentChannel != null && _currentChannel!['url'] == channel['url'];
+                          final bool isFocused = _focusedListIndex != null && _focusedListIndex == index;
                           return SizedBox(
                             height: 50,
                             child: MouseRegion(
                               cursor: SystemMouseCursors.click,
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: isCurrentChannel ? const Color(0x33A855F7) : null, // light purple bg
+                                  color: isFocused
+                                      ? const Color(0x22FFFFFF)
+                                      : (isCurrentChannel ? const Color(0x33A855F7) : null),
                                   border: Border(
                                     left: BorderSide(
-                                      color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.transparent,
+                                      color: isFocused
+                                          ? Colors.white
+                                          : (isCurrentChannel ? const Color(0xFFA855F7) : Colors.transparent),
                                       width: 3,
                                     ),
                                   ),
@@ -485,7 +634,9 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                                             softWrap: false,
                                             style: TextStyle(
                                               fontWeight: FontWeight.w600,
-                                              color: isCurrentChannel ? const Color(0xFFA855F7) : Colors.white,
+                                              color: isFocused
+                                                  ? Colors.white
+                                                  : (isCurrentChannel ? const Color(0xFFA855F7) : Colors.white),
                                             ),
                                           ),
                                         ),
@@ -535,6 +686,17 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isInitialized = false;
   bool _isInitializing = false;
   String? _currentUrl;
+
+  void togglePlayPause() {
+    if (_controller == null) return;
+    setState(() {
+      if (_controller!.value.isPlaying) {
+        _controller!.pause();
+      } else {
+        _controller!.play();
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -717,3 +879,25 @@ class _PlayerScreenState extends State<PlayerScreen> {
 // TV-specific focusable FAB removed; reverted to standard FABs
 
 // Removed old fullscreen page implementation; now fullscreen is same-page overlay
+
+// Helpers inside state class
+extension _ChannelListScroll on _ChannelListScreenState {
+  static const double _listItemExtent = 51.0;
+
+  void _ensureListItemVisible() {
+    if (!_listScrollController.hasClients || _focusedListIndex == null) return;
+    final double rawTarget = _focusedListIndex! * _listItemExtent;
+    final double maxScroll = _listScrollController.position.maxScrollExtent;
+    final double target = rawTarget.clamp(0.0, maxScroll);
+    _listScrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 160),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _playerTogglePlayPause() {
+    _playerKey.currentState?.togglePlayPause();
+  }
+}
+

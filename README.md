@@ -6,6 +6,9 @@ Windows-focused build notes
 - We now produce a portable Windows bundle that includes `teknetv.exe`, `flutter_windows.dll`, ICU data, plugins, native assets, and `data/flutter_assets`.
 - In GitHub Actions, download the artifact named `teknetv-windows-portable` and unzip it. Run `teknetv.exe` directly from the unzipped folder.
 
+### Windows single EXE installer
+- CI also produces an NSIS installer: download the artifact `teknetv-windows-setup` and run the `teknetv-Setup-<version>.exe` file. It installs the app to `C:\Program Files\teknetv` and creates shortcuts.
+
 ### Local Windows build
 1. Install Flutter (stable) and enable desktop: `flutter config --enable-windows-desktop`.
 2. Fetch deps: `flutter pub get`.

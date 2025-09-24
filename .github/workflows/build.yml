@@ -26,6 +26,14 @@ jobs:
     - name: Build Windows
       run: flutter build windows --release
 
+    - name: Install NSIS
+      run: choco install nsis -y
+
+    - name: Build Windows installer (NSIS)
+      shell: pwsh
+      run: |
+        & makensis "windows/installer/teknetv.nsi"
+
     - name: Create portable ZIP (includes flutter_windows.dll and assets)
       shell: pwsh
       run: |
@@ -39,6 +47,13 @@ jobs:
       with:
         name: teknetv-windows-portable
         path: teknetv-windows-portable.zip
+        retention-days: 30
+
+    - name: Upload Windows installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: teknetv-windows-setup
+        path: build/windows/x64/runner/Release/teknetv-Setup-*.exe
         retention-days: 30
 
   build-android:

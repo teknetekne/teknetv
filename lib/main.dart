@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:video_player/video_player.dart';
 import 'dart:async';
+import 'dart:io';
 
 void main() {
   runApp(const MyApp());
@@ -48,6 +49,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   final List<String> _controlIds = ['play_pause', 'refresh', 'prev', 'next', 'channel_list'];
   final GlobalKey<_PlayerScreenState> _playerKey = GlobalKey<_PlayerScreenState>();
   final ScrollController _channelListScrollController = ScrollController();
+  
 
   @override
   void initState() {
@@ -330,12 +332,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       case LogicalKeyboardKey.escape:
       case LogicalKeyboardKey.goBack:
       case LogicalKeyboardKey.backspace:
-        setState(() {
-          _showUiOverlays = !_showUiOverlays;
-        });
-        if (_showUiOverlays) {
-          _scheduleHideOverlays();
-        }
+        _handleBackButton();
         break;
       case LogicalKeyboardKey.pageUp:
       case LogicalKeyboardKey.audioVolumeUp:
@@ -442,6 +439,30 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
           curve: Curves.easeInOut,
         );
       }
+    }
+  }
+
+  void _handleBackButton() {
+    if (_isChannelListOpen) {
+      // Kanal listesi açıksa, önce onu kapat
+      setState(() {
+        _isChannelListOpen = false;
+      });
+      _scheduleHideOverlays();
+    } else {
+      // Direkt uygulamayı kapat
+      _exitApp();
+    }
+  }
+
+  void _exitApp() {
+    if (Platform.isAndroid) {
+      SystemNavigator.pop();
+    } else if (Platform.isLinux || Platform.isWindows || Platform.isMacOS) {
+      exit(0);
+    } else {
+      // iOS için SystemNavigator.pop() kullan
+      SystemNavigator.pop();
     }
   }
 
@@ -793,6 +814,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                       ),
                     ),
                   ),
+
               ],
             ),
       ),

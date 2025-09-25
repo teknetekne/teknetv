@@ -300,7 +300,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 
   // TV Navigation methods
   void _handleKeyEvent(KeyEvent event) {
-    if (event is KeyDownEvent) {
+    if (event is KeyDownEvent || event is KeyRepeatEvent) {
       if (_isChannelListOpen) {
         _handleChannelListNavigation(event);
       } else {
@@ -309,7 +309,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     }
   }
 
-  void _handleMainNavigation(KeyDownEvent event) {
+  void _handleMainNavigation(KeyEvent event) {
     switch (event.logicalKey) {
       case LogicalKeyboardKey.arrowLeft:
         setState(() {
@@ -347,19 +347,19 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     }
   }
 
-  void _handleChannelListNavigation(KeyDownEvent event) {
+  void _handleChannelListNavigation(KeyEvent event) {
     switch (event.logicalKey) {
       case LogicalKeyboardKey.arrowUp:
         setState(() {
           _focusedChannelIndex = (_focusedChannelIndex - 1 + channels.length) % channels.length;
         });
-        _scrollToFocusedChannel();
+        _scrollToFocusedChannel(animated: event is! KeyRepeatEvent);
         break;
       case LogicalKeyboardKey.arrowDown:
         setState(() {
           _focusedChannelIndex = (_focusedChannelIndex + 1) % channels.length;
         });
-        _scrollToFocusedChannel();
+        _scrollToFocusedChannel(animated: event is! KeyRepeatEvent);
         break;
       case LogicalKeyboardKey.select:
       case LogicalKeyboardKey.enter:
@@ -409,6 +409,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
           setState(() {
             _showUiOverlays = true;
           });
+          // Liste açıldığında seçili öğeye kaydır
+          _scrollToFocusedChannelDeferred();
         } else {
           _scheduleHideOverlays();
         }
@@ -416,7 +418,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     }
   }
 
-  void _scrollToFocusedChannel() {
+  void _scrollToFocusedChannel({bool animated = true}) {
     if (_channelListScrollController.hasClients) {
       const double itemHeight = 50.0; // Her kanal item'ının yüksekliği
       final double targetOffset = _focusedChannelIndex * itemHeight;
@@ -426,20 +428,37 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       // Eğer hedef pozisyon viewport'un dışındaysa scroll yap
       if (targetOffset < _channelListScrollController.offset) {
         // Yukarı scroll
-        _channelListScrollController.animateTo(
-          targetOffset,
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-        );
+        if (animated) {
+          _channelListScrollController.animateTo(
+            targetOffset,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+          );
+        } else {
+          _channelListScrollController.jumpTo(targetOffset.clamp(0.0, maxScrollExtent));
+        }
       } else if (targetOffset + itemHeight > _channelListScrollController.offset + viewportHeight - 60) {
         // Aşağı scroll - alt padding için 60px ekstra alan bırak
-        _channelListScrollController.animateTo(
-          (targetOffset + itemHeight - viewportHeight + 60).clamp(0.0, maxScrollExtent),
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeInOut,
-        );
+        final double newOffset = (targetOffset + itemHeight - viewportHeight + 60).clamp(0.0, maxScrollExtent);
+        if (animated) {
+          _channelListScrollController.animateTo(
+            newOffset,
+            duration: const Duration(milliseconds: 150),
+            curve: Curves.easeOut,
+          );
+        } else {
+          _channelListScrollController.jumpTo(newOffset);
+        }
       }
     }
+  }
+
+  // Liste açıldıktan sonra bir sonraki frame'de seçili kanala kaydır
+  void _scrollToFocusedChannelDeferred() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _scrollToFocusedChannel();
+    });
   }
 
   void _handleBackButton() {
@@ -524,11 +543,18 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                     onPressed: () {
                       setState(() {
                         _isChannelListOpen = !_isChannelListOpen;
+                        if (_isChannelListOpen) {
+                          _focusedChannelIndex = channels.indexWhere(
+                            (c) => _currentChannel != null && c['url'] == _currentChannel!['url']
+                          );
+                          if (_focusedChannelIndex == -1) _focusedChannelIndex = 0;
+                        }
                       });
                       if (_isChannelListOpen) {
                         setState(() {
                           _showUiOverlays = true;
                         });
+                        _scrollToFocusedChannelDeferred();
                       } else {
                         _scheduleHideOverlays();
                       }
@@ -618,11 +644,18 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             onToggleChannelList: () {
                               setState(() {
                                 _isChannelListOpen = !_isChannelListOpen;
+                    if (_isChannelListOpen) {
+                      _focusedChannelIndex = channels.indexWhere(
+                        (c) => _currentChannel != null && c['url'] == _currentChannel!['url']
+                      );
+                      if (_focusedChannelIndex == -1) _focusedChannelIndex = 0;
+                    }
                               });
                               if (_isChannelListOpen) {
                                 setState(() {
                                   _showUiOverlays = true;
                                 });
+                    _scrollToFocusedChannelDeferred();
                               } else {
                                 _scheduleHideOverlays();
                               }
@@ -855,6 +888,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isInitialized = false;
   bool _isInitializing = false;
   String? _currentUrl;
+  bool _hasError = false;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -877,6 +912,8 @@ class _PlayerScreenState extends State<PlayerScreen> {
     setState(() {
       _isInitializing = true;
       _currentUrl = widget.url;
+      _hasError = false;
+      _errorMessage = null;
     });
     
     // Dispose existing controller if URL changed
@@ -925,6 +962,16 @@ class _PlayerScreenState extends State<PlayerScreen> {
         setState(() {
           _isInitialized = false;
           _isInitializing = false;
+          _hasError = true;
+          final String controllerError = (_controller != null && _controller!.value.hasError)
+              ? (_controller!.value.errorDescription ?? '')
+              : '';
+          final bool isTimeout = e.toString().toLowerCase().contains('timeout');
+          final String baseMessage = isTimeout
+              ? 'Video 5 saniye içinde başlatılamadı (zaman aşımı).'
+              : 'Video başlatılırken hata oluştu.';
+          final String detail = controllerError.isNotEmpty ? controllerError : e.toString();
+          _errorMessage = '$baseMessage\n$detail';
         });
       }
     }
@@ -975,20 +1022,54 @@ class _PlayerScreenState extends State<PlayerScreen> {
         color: Colors.black,
         child: Stack(
           children: [
-            // Video player or loading indicator
-            _isInitialized
-                ? Center(
-                    child: _controller != null && _isInitialized
-                        ? AspectRatio(
-                            aspectRatio: _controller!.value.aspectRatio,
-                            child: VideoPlayer(_controller!),
-                          )
-                        : const CircularProgressIndicator(),
-                  )
-                : const Center(child: CircularProgressIndicator()),
+            // Video, yükleme veya hata durumu
+            if (_hasError)
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      color: Colors.red,
+                      size: 64,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      _errorMessage?.split('\n').first ?? 'Video başlatılamadı.',
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                      textAlign: TextAlign.center,
+                    ),
+                    if ((_errorMessage ?? '').contains('\n')) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _errorMessage!.split('\n').skip(1).join('\n'),
+                        style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Yeniden denemek için yenile düğmesini kullanın.',
+                      style: TextStyle(color: Colors.white70, fontSize: 14),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              )
+            else if (_isInitialized)
+              Center(
+                child: _controller != null && _isInitialized
+                    ? AspectRatio(
+                        aspectRatio: _controller!.value.aspectRatio,
+                        child: VideoPlayer(_controller!),
+                      )
+                    : const CircularProgressIndicator(),
+              )
+            else
+              const Center(child: CircularProgressIndicator()),
             
-            // Controls overlay - always show when showControls is true or when not initialized
-            if (widget.showControls || !_isInitialized)
+            // Hata durumunda da alt kontroller görünür
+            if (widget.showControls || !_isInitialized || _hasError)
               Positioned(
                 bottom: 8,
                 left: 0,

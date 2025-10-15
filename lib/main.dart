@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:video_player/video_player.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
+import 'dart:convert';
 
 void main() {
   runApp(const MyApp());
@@ -50,6 +53,11 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   final GlobalKey<_PlayerScreenState> _playerKey = GlobalKey<_PlayerScreenState>();
   final ScrollController _channelListScrollController = ScrollController();
   
+  // Local M3U generation state
+  String? _currentDomain;
+  String? _currentRefererDomain;
+  bool _isGeneratingLocalM3U = false;
+  
 
   @override
   void initState() {
@@ -83,6 +91,291 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         });
       }
     });
+  }
+
+  // Dynamic referer domain fetching function (adapted from Python)
+  Future<String> _getDynamicRefererDomain() async {
+    const String baseDomain = "tvhane";
+    
+    // Read saved domain number from SharedPreferences
+    int domainNumber = await _readSavedDomainNumber();
+    
+    while (true) {
+      try {
+        final String testDomain = "https://$baseDomain$domainNumber.com/";
+        final response = await http.get(
+          Uri.parse(testDomain),
+          headers: {'User-Agent': 'TekneTV/1.0'},
+        ).timeout(const Duration(seconds: 10));
+        
+        if (response.statusCode == 200) {
+          print("Working referer domain: $testDomain");
+          // Save successful domain number
+          await _saveDomainNumber(domainNumber);
+          return testDomain;
+        }
+      } catch (e) {
+        print("Domain $baseDomain$domainNumber.com failed: $e");
+      }
+      
+      domainNumber++;
+      if (domainNumber > 100) { // Maximum limit for security
+        print("Maximum domain attempts reached, using default domain");
+        return "https://tvhane5.com/";
+      }
+    }
+  }
+
+  // Read saved domain number from SharedPreferences
+  Future<int> _readSavedDomainNumber() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getInt('last_domain_number') ?? 5; // Default 5
+    } catch (e) {
+      return 5;
+    }
+  }
+
+  // Save domain number to SharedPreferences
+  Future<void> _saveDomainNumber(int domainNumber) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt('last_domain_number', domainNumber);
+    } catch (e) {
+      print("Error saving domain number: $e");
+    }
+  }
+
+  // Dynamic domain fetching function (adapted from Python)
+  Future<String> _getDynamicDomain() async {
+    try {
+      // Get dynamic referer domain
+      final String refererDomain = await _getDynamicRefererDomain();
+      
+      final response = await http.get(
+        Uri.parse('https://sportsobama.com/domain.php'),
+        headers: {
+          'Referer': refererDomain,
+          'Host': 'sportsobama.com',
+          'User-Agent': 'TekneTV/1.0',
+        },
+      ).timeout(const Duration(seconds: 10));
+      
+      final String raw = response.body;
+      String? baseUrl;
+
+      // Try JSON parse: { "baseurl": "..." } or {baseurl: "..."}
+      try {
+        // Normalize JSON by adding quotes around baseurl key
+        String normalized = raw.replaceAllMapped(
+          RegExp(r'([,{]\s*)(baseurl)(\s*:)'),
+          (match) => '${match.group(1)}"${match.group(2)}"${match.group(3)}',
+        );
+        normalized = normalized.replaceAll("'", '"');
+        
+        final Map<String, dynamic> obj = json.decode(normalized);
+        if (obj.containsKey('baseurl')) {
+          baseUrl = obj['baseurl'].toString();
+        }
+      } catch (e) {
+        // JSON parsing failed, continue with regex approach
+      }
+
+      // If not JSON, extract https URL from plain text
+      if (baseUrl == null || baseUrl.isEmpty) {
+        final RegExp urlRegex = RegExp(r'''https?://[^\s"'{}]+''');
+        final Match? match = urlRegex.firstMatch(raw);
+        if (match != null) {
+          baseUrl = match.group(0);
+        }
+      }
+
+      if (baseUrl == null || baseUrl.isEmpty) {
+        throw Exception('baseurl not found');
+      }
+
+      // Normalize trailing slash
+      return baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
+
+    } catch (e) {
+      print('Domain fetching error: $e');
+      // Default domain in case of error
+      return 'https://two.4928d54d950ee70q42.lat/';
+    }
+  }
+
+  // Channel URLs and names (from Python code)
+  static const List<String> _channelUrls = [
+    "yayinzirve.m3u8",
+    "yayinb2.m3u8",
+    "yayinb3.m3u8",
+    "yayinb4.m3u8",
+    "yayinb5.m3u8",
+    "yayinbm1.m3u8",
+    "yayinbm2.m3u8",
+    "yayinss.m3u8",
+    "yayinss2.m3u8",
+    "yayint1.m3u8",
+    "yayint2.m3u8",
+    "yayint3.m3u8",
+    "yayint4.m3u8",
+    "yayinsmarts.m3u8",
+    "yayineu1.m3u8",
+    "yayineu2.m3u8",
+    "yayinas.m3u8",
+    "yayinsms2.m3u8",
+    "yayinatv.m3u8",
+    "yayintv8.m3u8",
+    "yayintv85.m3u8",
+    "yayinnbatv.m3u8",
+    "yayinex1.m3u8",
+    "yayinex2.m3u8",
+    "yayinex3.m3u8",
+    "yayinex4.m3u8",
+    "yayinex5.m3u8",
+    "yayinex6.m3u8",
+    "yayinex7.m3u8",
+    "yayinex8.m3u8",
+    "yayintrtspor.m3u8",
+    "yayintrtspor2.m3u8",
+    "yayintrt1.m3u8",
+    "yayinf1.m3u8"
+  ];
+
+  static const List<String> _channelNames = [
+    "beIN Sports 1",
+    "beIN Sports 2",
+    "beIN Sports 3",
+    "beIN Sports 4",
+    "beIN Sports 5",
+    "beIN Sports MAX 1",
+    "beIN Sports MAX 2",
+    "S Sport",
+    "S Sport 2",
+    "Tivibu Spor 1",
+    "Tivibu Spor 2",
+    "Tivibu Spor 3",
+    "Tivibu Spor 4",
+    "Spor Smart",
+    "Eurosport 1",
+    "Eurosport 2",
+    "A Spor",
+    "Spor Smart 2",
+    "atv",
+    "TV8",
+    "TV8.5",
+    "NBA TV",
+    "Tabii Spor 1",
+    "Tabii Spor 2",
+    "Tabii Spor 3",
+    "Tabii Spor 4",
+    "Tabii Spor 5",
+    "Tabii Spor 6",
+    "Tabii Spor 7",
+    "Tabii Spor 8",
+    "TRT Spor",
+    "TRT Spor 2",
+    "TRT 1",
+    "Sky Sport F1"
+  ];
+
+  // Generate local M3U file
+  Future<void> _generateLocalM3U() async {
+    if (_isGeneratingLocalM3U) return;
+    
+    setState(() {
+      _isGeneratingLocalM3U = true;
+    });
+
+    try {
+      // Get dynamic domain and referer
+      _currentDomain = await _getDynamicDomain();
+      _currentRefererDomain = await _getDynamicRefererDomain();
+      
+      print("Using domain: $_currentDomain");
+      print("Using referer domain: $_currentRefererDomain");
+
+      // Create M3U content
+      StringBuffer m3uContent = StringBuffer();
+      m3uContent.writeln("#EXTM3U");
+      
+      const String userAgent = "#EXTVLCOPT:http-user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+      final String referer = "#EXTVLCOPT:http-referrer=$_currentRefererDomain";
+
+      for (int i = 0; i < _channelUrls.length; i++) {
+        final String fullUrl = _currentDomain! + _channelUrls[i];
+        m3uContent.writeln();
+        m3uContent.writeln("#EXTINF:-1, ${_channelNames[i]}");
+        m3uContent.writeln(userAgent);
+        m3uContent.writeln(referer);
+        m3uContent.writeln(fullUrl);
+        print(fullUrl);
+      }
+
+      // Get application documents directory
+      final Directory appDocDir = await getApplicationDocumentsDirectory();
+      final File m3uFile = File('${appDocDir.path}/bein.m3u');
+      
+      // Write M3U file
+      await m3uFile.writeAsString(m3uContent.toString(), encoding: utf8);
+      
+      print("Local M3U file written: ${m3uFile.path}");
+      print("M3U file content length: ${m3uContent.length}");
+
+      // Parse the generated content and update channels
+      final List<Map<String, dynamic>> newChannels = _parseLocalM3U(m3uContent.toString());
+      
+      if (mounted) {
+        setState(() {
+          channels = newChannels;
+          _isLoading = false;
+        });
+      }
+
+    } catch (e) {
+      print("Error generating local M3U: $e");
+      if (mounted) {
+        _showError('Local M3U generation failed: $e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGeneratingLocalM3U = false;
+        });
+      }
+    }
+  }
+
+  // Parse local M3U content
+  List<Map<String, dynamic>> _parseLocalM3U(String content) {
+    final List<String> lines = content.split('\n');
+    List<Map<String, dynamic>> list = [];
+    String? title;
+    Map<String, String> currentHeaders = {};
+
+    for (String line in lines) {
+      line = line.trim();
+      if (line.startsWith('#EXTINF')) {
+        final List<String> parts = line.split(',');
+        title = parts.isNotEmpty ? parts.last.trim() : 'Unknown';
+      } else if (line.startsWith('#EXTVLCOPT')) {
+        if (line.contains('http-user-agent')) {
+          final String ua = line.split('=')[1];
+          currentHeaders['User-Agent'] = ua;
+        } else if (line.contains('http-referrer')) {
+          final String ref = line.split('=')[1];
+          currentHeaders['Referer'] = ref;
+        }
+      } else if (line.isNotEmpty && !line.startsWith('#')) {
+        list.add({
+          'title': title ?? 'Unknown',
+          'url': line,
+          'headers': {...currentHeaders},
+        });
+        currentHeaders.clear();
+      }
+    }
+    return list;
   }
 
   Future<void> _loadData() async {
@@ -185,8 +478,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     // Show refresh feedback
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Yenileniyor: mevcut kanal yeniden başlatılacak...'),
-        duration: Duration(seconds: 2),
+        content: Text('Yenileniyor: dinamik domain ile yerel M3U oluşturuluyor...'),
+        duration: Duration(seconds: 3),
       ),
     );
 
@@ -201,8 +494,8 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     });
 
     try {
-      // Fetch fresh data with cache clearing
-      await fetchM3U(forceRefresh: true);
+      // Generate local M3U with dynamic domain
+      await _generateLocalM3U();
 
       if (!mounted) return;
 
@@ -824,24 +1117,36 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                   ),
 
                 // Loading overlay (when channels are being loaded)
-                if (_isLoading)
+                if (_isLoading || _isGeneratingLocalM3U)
                   Positioned.fill(
                     child: Container(
                       color: Colors.black.withValues(alpha: 0.8),
-                      child: const Center(
+                      child: Center(
                         child: Column(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            CircularProgressIndicator(color: Colors.white),
-                            SizedBox(height: 16),
+                            const CircularProgressIndicator(color: Colors.white),
+                            const SizedBox(height: 16),
                             Text(
-                              'Loading channels...', 
-                              style: TextStyle(
+                              _isGeneratingLocalM3U 
+                                ? 'Dinamik domain ile yerel M3U oluşturuluyor...' 
+                                : 'Loading channels...', 
+                              style: const TextStyle(
                                 fontSize: 16, 
                                 color: Colors.white,
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
+                            if (_isGeneratingLocalM3U) ...[
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Bu işlem birkaç saniye sürebilir',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
                           ],
                         ),
                       ),

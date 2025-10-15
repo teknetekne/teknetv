@@ -64,6 +64,19 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   String? _currentDomain;
   String? _currentRefererDomain;
   bool _isGeneratingLocalM3U = false;
+
+  // Platform detection
+  bool get _isTV => _isAndroidTV();
+  bool get _isDesktop => Platform.isMacOS || Platform.isWindows || Platform.isLinux;
+  bool get _isMobile => Platform.isAndroid || Platform.isIOS;
+
+  // Check if running on Android TV
+  bool _isAndroidTV() {
+    if (!Platform.isAndroid) return false;
+    // Basic TV detection - can be enhanced with more sophisticated checks
+    // For now, we'll use screen size and input method as indicators
+    return true; // We'll implement proper TV detection later if needed
+  }
   
 
   @override
@@ -102,28 +115,31 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 
   // Dynamic referer domain fetching function (adapted from Python)
   Future<String> _getDynamicRefererDomain() async {
-    const String baseDomain = "tvhane";
-    
-    // Read saved domain number from SharedPreferences
-    int domainNumber = await _readSavedDomainNumber();
-    
-    while (true) {
-        final String testDomain = "https://$baseDomain$domainNumber.com/";
-        final response = await http.get(
-          Uri.parse(testDomain),
-          headers: {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'},
-        ).timeout(const Duration(seconds: 10));
-        
-        if (response.statusCode == 200) {
-          // Save successful domain number
-          await _saveDomainNumber(domainNumber);
-          return testDomain;
-        }
+    try {
+      const String baseDomain = "tvhane";
       
-      domainNumber++;
-      if (domainNumber > 100) { // Maximum limit for security
-        return "https://tvhane5.com/";
+      // Read current counter
+      int counter = await _readDomainCounter();
+      
+      // If counter reaches 10, reset and use fallback
+      if (counter >= 10) {
+        unawaited(_saveDomainCounter(0));
+        return "https://tvhane.com/";
       }
+      
+      // Get domain number and increment counter
+      int domainNumber = await _readSavedDomainNumber();
+      if (domainNumber < 1) domainNumber = 10; // Security check
+      
+      // Increment counter and domain number
+      unawaited(_saveDomainCounter(counter + 1));
+      unawaited(_saveDomainNumber(domainNumber + 1));
+      
+      final String referer = "https://$baseDomain$domainNumber.com/";
+      return referer;
+    } catch (_) {
+      // Ultimate fallback when anything fails
+      return "https://tvhane.com/";
     }
   }
 
@@ -131,9 +147,9 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   Future<int> _readSavedDomainNumber() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      return prefs.getInt('last_domain_number') ?? 5; // Default 5
+      return prefs.getInt('last_domain_number') ?? 10; // Default 10
     } catch (e) {
-      return 5;
+      return 10;
     }
   }
 
@@ -141,6 +157,22 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   Future<void> _saveDomainNumber(int domainNumber) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt('last_domain_number', domainNumber);
+  }
+
+  // Read domain increment counter
+  Future<int> _readDomainCounter() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getInt('domain_counter') ?? 0;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  // Save domain increment counter
+  Future<void> _saveDomainCounter(int counter) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('domain_counter', counter);
   }
 
   // Dynamic domain fetching function (adapted from Python)
@@ -153,7 +185,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         headers: {
           'Referer': refererDomain,
           'Host': 'sportsobama.com',
-          'User-Agent': 'TekneTV/1.0',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
         },
       ).timeout(const Duration(seconds: 10));
       
@@ -531,48 +563,107 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   }
 
   void _handleMainNavigation(KeyEvent event) {
-    switch (event.logicalKey) {
-      case LogicalKeyboardKey.arrowLeft:
-        setState(() {
-          _focusedControlIndex = (_focusedControlIndex - 1 + _controlIds.length) % _controlIds.length;
-          _showUiOverlays = true;
-        });
-        _scheduleHideOverlays();
-        break;
-      case LogicalKeyboardKey.arrowRight:
-        setState(() {
-          _focusedControlIndex = (_focusedControlIndex + 1) % _controlIds.length;
-          _showUiOverlays = true;
-        });
-        _scheduleHideOverlays();
-        break;
-      case LogicalKeyboardKey.select:
-      case LogicalKeyboardKey.enter:
-        _executeFocusedControl();
-        break;
-      case LogicalKeyboardKey.keyF:
-        // Toggle system fullscreen
-        _playerKey.currentState?.toggleFullscreen();
-        break;
-      case LogicalKeyboardKey.keyR:
-        // Refresh with dynamic domain and regenerate local M3U
-        _refreshAll();
-        break;
-      case LogicalKeyboardKey.escape:
-      case LogicalKeyboardKey.goBack:
-      case LogicalKeyboardKey.backspace:
-        _handleBackButton();
-        break;
-      case LogicalKeyboardKey.pageUp:
-      case LogicalKeyboardKey.audioVolumeUp:
-        // CH+ tuşu - sonraki kanal
-        _goNextChannel();
-        break;
-      case LogicalKeyboardKey.pageDown:
-      case LogicalKeyboardKey.audioVolumeDown:
-        // CH- tuşu - önceki kanal
-        _goPrevChannel();
-        break;
+    // Desktop kısayol tuşları
+    if (_isDesktop) {
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.space:
+          // Play/pause
+          _playerKey.currentState?.togglePlayPause();
+          break;
+        case LogicalKeyboardKey.keyR:
+          // Refresh
+          _refreshAll();
+          break;
+        case LogicalKeyboardKey.keyA:
+          // Previous channel
+          _goPrevChannel();
+          break;
+        case LogicalKeyboardKey.keyD:
+          // Next channel
+          _goNextChannel();
+          break;
+        case LogicalKeyboardKey.keyM:
+          // Mute/unmute
+          _playerKey.currentState?.toggleMute();
+          break;
+        case LogicalKeyboardKey.keyF:
+          // Fullscreen
+          _playerKey.currentState?.toggleFullscreen();
+          break;
+        case LogicalKeyboardKey.keyC:
+          // Channel list
+          setState(() {
+            _isChannelListOpen = !_isChannelListOpen;
+            if (_isChannelListOpen) {
+              _focusedChannelIndex = channels.indexWhere(
+                (c) => _currentChannel != null && c['url'] == _currentChannel!['url']
+              );
+              if (_focusedChannelIndex == -1) _focusedChannelIndex = 0;
+            }
+          });
+          if (_isChannelListOpen) {
+            setState(() {
+              _showUiOverlays = true;
+            });
+            _scrollToFocusedChannelDeferred();
+          } else {
+            _scheduleHideOverlays();
+          }
+          break;
+        case LogicalKeyboardKey.escape:
+        case LogicalKeyboardKey.goBack:
+        case LogicalKeyboardKey.backspace:
+          _handleBackButton();
+          break;
+      }
+      return; // Desktop kısayolları işlendi, TV navigasyonuna geçme
+    }
+
+    // TV navigasyonu (sadece TV'de çalışır)
+    if (_isTV) {
+      switch (event.logicalKey) {
+        case LogicalKeyboardKey.arrowLeft:
+          setState(() {
+            _focusedControlIndex = (_focusedControlIndex - 1 + _controlIds.length) % _controlIds.length;
+            _showUiOverlays = true;
+          });
+          _scheduleHideOverlays();
+          break;
+        case LogicalKeyboardKey.arrowRight:
+          setState(() {
+            _focusedControlIndex = (_focusedControlIndex + 1) % _controlIds.length;
+            _showUiOverlays = true;
+          });
+          _scheduleHideOverlays();
+          break;
+        case LogicalKeyboardKey.select:
+        case LogicalKeyboardKey.enter:
+          _executeFocusedControl();
+          break;
+        case LogicalKeyboardKey.keyF:
+          // Toggle system fullscreen
+          _playerKey.currentState?.toggleFullscreen();
+          break;
+        case LogicalKeyboardKey.keyR:
+          // Refresh with dynamic domain and regenerate local M3U
+          _refreshAll();
+          break;
+        case LogicalKeyboardKey.escape:
+        case LogicalKeyboardKey.goBack:
+        case LogicalKeyboardKey.backspace:
+          _handleBackButton();
+          break;
+        case LogicalKeyboardKey.pageUp:
+        case LogicalKeyboardKey.audioVolumeUp:
+          // CH+ tuşu - sonraki kanal
+          _goNextChannel();
+          break;
+        case LogicalKeyboardKey.pageDown:
+        case LogicalKeyboardKey.audioVolumeDown:
+          // CH- tuşu - önceki kanal
+          _goPrevChannel();
+          break;
+      }
     }
   }
 
@@ -752,81 +843,107 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
           builder: (context) {
             final double width = MediaQuery.of(context).size.width;
             final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
+            
+            // Platform bazlı buton listesi
+            List<Widget> buttons = [];
+            
+            // Tüm platformlar için: play, refresh, prev, next, channel list
+            buttons.addAll([
+              // Play/Pause (leftmost)
+              _buildControlButton(
+                index: 0,
+                icon: _playerKey.currentState?.isPlaying == true 
+                    ? Icons.pause 
+                    : Icons.play_arrow,
+                onPressed: () {
+                  _playerKey.currentState?.togglePlayPause();
+                },
+                heroTag: "loading_play_pause",
+              ),
+              const SizedBox(width: 8),
+              // Refresh (next to pause)
+              _buildControlButton(
+                index: 1,
+                icon: Icons.refresh,
+                onPressed: _refreshAll,
+                heroTag: "loading_refresh",
+              ),
+              const SizedBox(width: 8),
+              // Prev channel
+              _buildControlButton(
+                index: 2,
+                icon: Icons.skip_previous,
+                onPressed: _goPrevChannel,
+                heroTag: "loading_prev",
+              ),
+              const SizedBox(width: 8),
+              // Next channel
+              _buildControlButton(
+                index: 3,
+                icon: Icons.skip_next,
+                onPressed: _goNextChannel,
+                heroTag: "loading_next",
+              ),
+            ]);
+
+            // Desktop için ek butonlar: mute ve fullscreen
+            if (_isDesktop) {
+              buttons.addAll([
+                const SizedBox(width: 8),
+                // Mute/Unmute button for desktop
+                _buildControlButton(
+                  index: 5,
+                  icon: _playerKey.currentState?._isMuted == true 
+                      ? Icons.volume_off 
+                      : Icons.volume_up,
+                  onPressed: () {
+                    _playerKey.currentState?.toggleMute();
+                  },
+                  heroTag: "loading_mute",
+                ),
+                const SizedBox(width: 8),
+                // Fullscreen toggle for desktop
+                _buildControlButton(
+                  index: 6,
+                  icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                  onPressed: _toggleSystemFullscreen,
+                  heroTag: "loading_fullscreen",
+                ),
+              ]);
+            }
+
+            buttons.addAll([
+              const Spacer(),
+              // Channel list (far right)
+              _buildControlButton(
+                index: 4,
+                icon: Icons.list,
+                onPressed: () {
+                  setState(() {
+                    _isChannelListOpen = !_isChannelListOpen;
+                    if (_isChannelListOpen) {
+                      _focusedChannelIndex = channels.indexWhere(
+                        (c) => _currentChannel != null && c['url'] == _currentChannel!['url']
+                      );
+                      if (_focusedChannelIndex == -1) _focusedChannelIndex = 0;
+                    }
+                  });
+                  if (_isChannelListOpen) {
+                    setState(() {
+                      _showUiOverlays = true;
+                    });
+                    _scrollToFocusedChannelDeferred();
+                  } else {
+                    _scheduleHideOverlays();
+                  }
+                },
+                heroTag: "loading_toggle_list",
+              ),
+            ]);
+            
             return Padding(
               padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
-              child: Row(
-                children: [
-                  // Play/Pause (leftmost)
-                  _buildControlButton(
-                    index: 0,
-                    icon: Icons.play_arrow,
-                    onPressed: () {
-                      // Loading sırasında play/pause çalışmaz
-                    },
-                    heroTag: "loading_play_pause",
-                  ),
-                  const SizedBox(width: 8),
-                  // Refresh (next to pause)
-                  _buildControlButton(
-                    index: 1,
-                    icon: Icons.refresh,
-                    onPressed: _refreshAll,
-                    heroTag: "loading_refresh",
-                  ),
-                  const SizedBox(width: 8),
-                  // Prev channel
-                  _buildControlButton(
-                    index: 2,
-                    icon: Icons.skip_previous,
-                    onPressed: _goPrevChannel,
-                    heroTag: "loading_prev",
-                  ),
-                  const SizedBox(width: 8),
-                  // Next channel
-                  _buildControlButton(
-                    index: 3,
-                    icon: Icons.skip_next,
-                    onPressed: _goNextChannel,
-                    heroTag: "loading_next",
-                  ),
-                  const Spacer(),
-                  // Fullscreen toggle (desktop)
-                  if (Platform.isMacOS || Platform.isWindows || Platform.isLinux)
-                    _buildControlButton(
-                      index: 5,
-                      icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                      onPressed: _toggleSystemFullscreen,
-                      heroTag: "loading_fullscreen",
-                    ),
-                  
-                  const SizedBox(width: 8),
-                  // Channel list (far right)
-                  _buildControlButton(
-                    index: 4,
-                    icon: Icons.list,
-                    onPressed: () {
-                      setState(() {
-                        _isChannelListOpen = !_isChannelListOpen;
-                        if (_isChannelListOpen) {
-                          _focusedChannelIndex = channels.indexWhere(
-                            (c) => _currentChannel != null && c['url'] == _currentChannel!['url']
-                          );
-                          if (_focusedChannelIndex == -1) _focusedChannelIndex = 0;
-                        }
-                      });
-                      if (_isChannelListOpen) {
-                        setState(() {
-                          _showUiOverlays = true;
-                        });
-                        _scrollToFocusedChannelDeferred();
-                      } else {
-                        _scheduleHideOverlays();
-                      }
-                    },
-                    heroTag: "loading_toggle_list",
-                  ),
-                ],
-              ),
+              child: Row(children: buttons),
             );
           },
         ),
@@ -840,7 +957,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     required VoidCallback? onPressed,
     required String heroTag,
   }) {
-    final isFocused = _focusedControlIndex == index;
+    final isFocused = _isTV && _focusedControlIndex == index;
     return FloatingActionButton.small(
       heroTag: heroTag,
       elevation: 0,
@@ -930,6 +1047,15 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                             focusedControlIndex: _focusedControlIndex,
                             onPlayPause: () {
                               // This will be handled by the player screen itself
+                            },
+                            isTV: _isTV,
+                            isDesktop: _isDesktop,
+                            isMobile: _isMobile,
+                            onVideoStateChanged: () {
+                              // Trigger rebuild when video state changes
+                              if (mounted) {
+                                setState(() {});
+                              }
                             },
                           ),
                       ),
@@ -1141,6 +1267,10 @@ class PlayerScreen extends StatefulWidget {
   final VoidCallback? onNextChannel;
   final int focusedControlIndex;
   final VoidCallback? onPlayPause;
+  final bool isTV;
+  final bool isDesktop;
+  final bool isMobile;
+  final VoidCallback? onVideoStateChanged;
 
   const PlayerScreen({
     super.key, 
@@ -1153,6 +1283,10 @@ class PlayerScreen extends StatefulWidget {
     this.onNextChannel,
     required this.focusedControlIndex,
     this.onPlayPause,
+    required this.isTV,
+    required this.isDesktop,
+    required this.isMobile,
+    this.onVideoStateChanged,
   });
 
   @override
@@ -1213,10 +1347,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
     _volumeOverlayEntry = OverlayEntry(
       builder: (context) {
         return Positioned(
-          left: buttonPos.dx + buttonSize.width / 2 - 32,
-          top: buttonPos.dy - 200,
-          width: 64,
-          height: 190,
+          left: buttonPos.dx + buttonSize.width / 2 - 20,
+          top: buttonPos.dy - 170,
+          width: 40,
+          height: 180,
           child: MouseRegion(
             onEnter: (_) => _isHoveringVolume = true,
             onExit: (_) {
@@ -1230,7 +1364,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
               child: Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: Colors.black87,
+                  color: const Color(0xFF4F378B),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Column(
@@ -1305,6 +1439,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
     
     // Dispose existing controller if URL changed
     if (_controller != null && _currentUrl != widget.url) {
+      _controller!.removeListener(_onVideoStateChanged);
       await _controller!.dispose();
       _controller = null;
     }
@@ -1337,6 +1472,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
           _isInitializing = false;
         });
         
+        // Add listener for video state changes
+        _controller!.addListener(_onVideoStateChanged);
+        
         // Auto-play with small delay
         Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted && _controller != null) {
@@ -1367,8 +1505,15 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  void _onVideoStateChanged() {
+    if (mounted && widget.onVideoStateChanged != null) {
+      widget.onVideoStateChanged!();
+    }
+  }
+
   @override
   void dispose() {
+    _controller?.removeListener(_onVideoStateChanged);
     WakelockPlus.disable();
     _controller?.dispose();
     _hideVolumeOverlay();
@@ -1387,13 +1532,27 @@ class _PlayerScreenState extends State<PlayerScreen> {
     }
   }
 
+  void toggleMute() {
+    if (_controller != null) {
+      setState(() {
+        _isMuted = !_isMuted;
+        _controller!.setVolume(_isMuted ? 0.0 : _volume);
+      });
+      // Update volume overlay if it's open
+      _volumeOverlayEntry?.markNeedsBuild();
+    }
+  }
+
+  // Expose video playing state to parent
+  bool get isPlaying => _controller?.value.isPlaying ?? false;
+
   Widget _buildControlButton({
     required int index,
     required IconData icon,
     required VoidCallback? onPressed,
     required String heroTag,
   }) {
-    final isFocused = widget.focusedControlIndex == index;
+    final isFocused = widget.isTV && widget.focusedControlIndex == index;
     return FloatingActionButton.small(
       heroTag: heroTag,
       elevation: 0,
@@ -1537,115 +1696,114 @@ class _PlayerScreenState extends State<PlayerScreen> {
                     builder: (context) {
                       final double width = MediaQuery.of(context).size.width;
                       final double pad = (width * 0.05).clamp(8.0, 16.0).toDouble();
+                      // Platform bazlı buton listesi
+                      List<Widget> buttons = [];
+                      
+                      // Tüm platformlar için: play, refresh, prev, next, channel list
+                      buttons.addAll([
+                        // Play/Pause (leftmost)
+                        _buildControlButton(
+                          index: 0,
+                          icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
+                          onPressed: () {
+                            if (_controller != null) {
+                              setState(() {
+                                if (_controller!.value.isPlaying) {
+                                  _controller!.pause();
+                                  WakelockPlus.disable();
+                                } else {
+                                  _controller!.play();
+                                  WakelockPlus.enable();
+                                }
+                              });
+                            }
+                          },
+                          heroTag: "embedded_play_pause",
+                        ),
+                        const SizedBox(width: 8),
+                        // Refresh (next to pause)
+                        _buildControlButton(
+                          index: 1,
+                          icon: Icons.refresh,
+                          onPressed: widget.onRefresh,
+                          heroTag: "embedded_refresh",
+                        ),
+                        const SizedBox(width: 8),
+                        // Prev channel
+                        _buildControlButton(
+                          index: 2,
+                          icon: Icons.skip_previous,
+                          onPressed: widget.onPrevChannel,
+                          heroTag: "embedded_prev",
+                        ),
+                        const SizedBox(width: 8),
+                        // Next channel
+                        _buildControlButton(
+                          index: 3,
+                          icon: Icons.skip_next,
+                          onPressed: widget.onNextChannel,
+                          heroTag: "embedded_next",
+                        ),
+                      ]);
+
+                      // Desktop için ek butonlar: mute ve fullscreen
+                      if (widget.isDesktop) {
+                        buttons.addAll([
+                          const SizedBox(width: 8),
+                          // Mute/Unmute button for desktop
+                          MouseRegion(
+                            onEnter: (_) {
+                              _isHoveringVolume = true;
+                              _showVolumeOverlay();
+                            },
+                            onExit: (_) {
+                              _isHoveringVolume = false;
+                              Future.delayed(const Duration(milliseconds: 120), () {
+                                if (!_isHoveringVolume) _hideVolumeOverlay();
+                              });
+                            },
+                            child: FloatingActionButton.small(
+                              key: _volumeButtonKey,
+                              heroTag: "embedded_mute",
+                              elevation: 0,
+                              onPressed: () {
+                                if (_controller != null) {
+                                  setState(() {
+                                    _isMuted = !_isMuted;
+                                    _controller!.setVolume(_isMuted ? 0.0 : _volume);
+                                  });
+                                  // Update volume overlay if it's open
+                                  _volumeOverlayEntry?.markNeedsBuild();
+                                }
+                              },
+                              child: Icon(_isMuted ? Icons.volume_off : Icons.volume_up),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          // Fullscreen toggle for desktop
+                          _buildControlButton(
+                            index: 6,
+                            icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                            onPressed: _toggleSystemFullscreen,
+                            heroTag: "embedded_fullscreen",
+                          ),
+                        ]);
+                      }
+
+                      buttons.addAll([
+                        const Spacer(),
+                        // Channel list (far right)
+                        _buildControlButton(
+                          index: 4,
+                          icon: Icons.list,
+                          onPressed: widget.onToggleChannelList,
+                          heroTag: "embedded_toggle_list",
+                        ),
+                      ]);
+                      
                       return Padding(
                         padding: EdgeInsets.fromLTRB(pad, 0, pad, 6),
-                        child: Row(
-                            children: [
-                              // Play/Pause (leftmost)
-                              _buildControlButton(
-                                index: 0,
-                                icon: _controller?.value.isPlaying == true ? Icons.pause : Icons.play_arrow,
-                                onPressed: () {
-                                  if (_controller != null) {
-                                    setState(() {
-                                      if (_controller!.value.isPlaying) {
-                                        _controller!.pause();
-                                        WakelockPlus.disable();
-                                      } else {
-                                        _controller!.play();
-                                        WakelockPlus.enable();
-                                      }
-                                    });
-                                  }
-                                },
-                                heroTag: "embedded_play_pause",
-                              ),
-                              const SizedBox(width: 8),
-                    // Refresh (next to pause)
-                              _buildControlButton(
-                                index: 1,
-                                icon: Icons.refresh,
-                                onPressed: widget.onRefresh,
-                                heroTag: "embedded_refresh",
-                              ),
-                              const SizedBox(width: 8),
-                    // Prev channel
-                              _buildControlButton(
-                                index: 2,
-                                icon: Icons.skip_previous,
-                                onPressed: widget.onPrevChannel,
-                                heroTag: "embedded_prev",
-                              ),
-                              const SizedBox(width: 8),
-                    // Next channel
-                              _buildControlButton(
-                                index: 3,
-                                icon: Icons.skip_next,
-                                onPressed: widget.onNextChannel,
-                                heroTag: "embedded_next",
-                              ),
-                              if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) ...[
-                                const SizedBox(width: 8),
-                                // Volume/Mute with hover overlay
-                                MouseRegion(
-                                  onEnter: (_) {
-                                    _isHoveringVolume = true;
-                                    _showVolumeOverlay();
-                                  },
-                                  onExit: (_) {
-                                    _isHoveringVolume = false;
-                                    Future.delayed(const Duration(milliseconds: 120), () {
-                                      if (!_isHoveringVolume) _hideVolumeOverlay();
-                                    });
-                                  },
-                                  child: FloatingActionButton.small(
-                                    key: _volumeButtonKey,
-                                    heroTag: "embedded_mute",
-                                    elevation: 0,
-                                    onPressed: () {
-                                      if (_controller != null) {
-                                        setState(() {
-                                          _isMuted = !_isMuted;
-                                          _controller!.setVolume(_isMuted ? 0.0 : _volume);
-                                        });
-                                      }
-                                    },
-                                    child: Icon(_isMuted ? Icons.volume_off : Icons.volume_up),
-                                  ),
-                                ),
-                              ],
-                              const SizedBox(width: 8),
-                              // PiP toggle
-                              _buildControlButton(
-                                index: 6,
-                                icon: _isMiniPlayer ? Icons.close_fullscreen : Icons.picture_in_picture_alt,
-                                onPressed: () {
-                                  setState(() {
-                                    _isMiniPlayer = !_isMiniPlayer;
-                                  });
-                                },
-                                heroTag: "embedded_pip",
-                              ),
-                    const Spacer(),
-                    // Fullscreen toggle (desktop)
-                    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux)
-                      _buildControlButton(
-                        index: 5,
-                        icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-                        onPressed: _toggleSystemFullscreen,
-                        heroTag: "embedded_fullscreen",
-                      ),
-                    
-                    const SizedBox(width: 8),
-                    // Channel list (far right)
-                              _buildControlButton(
-                                index: 4,
-                                icon: Icons.list,
-                                onPressed: widget.onToggleChannelList,
-                                heroTag: "embedded_toggle_list",
-                              ),
-                            ],
-                          ),
+                        child: Row(children: buttons),
                       );
                     },
                   ),

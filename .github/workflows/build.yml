@@ -1,134 +1,78 @@
-name: Build Windows
+name: Build Flutter Releases
 
 on:
   push:
-    branches: [ main, master ]
+    branches:
+      - main
   pull_request:
-    branches: [ main, master ]
-  workflow_dispatch: # Manuel çalıştırma için
+  workflow_dispatch:
 
 jobs:
-  build-windows:
+  android-apk:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: zulu
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      - name: Restore Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  windows-build:
+    name: Windows Build
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v4
-    
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.35.4'
-        channel: 'stable'
-        cache: true
-    
-    - name: Setup Visual Studio Build Tools
-      uses: microsoft/setup-msbuild@v1
-    
-    - name: Get dependencies
-      run: flutter pub get
-    
-    - name: Generate app icons
-      run: flutter pub run flutter_launcher_icons:main
-    
-    - name: Build Windows
-      run: flutter build windows --release --verbose
-    
-    - name: Copy ICU data file if missing
-      shell: pwsh
-      run: |
-        $bundlePath = "build/windows/x64/runner/Release"
-        $icuFile = "$bundlePath/icudtl.dat"
-        
-        if (-not (Test-Path $icuFile)) {
-          Write-Host "ICU data file missing, attempting to copy from Flutter SDK..."
-          
-          # Try to find icudtl.dat in Flutter SDK
-          $flutterSdk = (flutter doctor -v | Select-String "Flutter version" | ForEach-Object { $_.Line.Split(" ")[2] })
-          $possiblePaths = @(
-            "C:\flutter\bin\cache\artifacts\engine\windows-x64\icudtl.dat",
-            "$env:FLUTTER_ROOT\bin\cache\artifacts\engine\windows-x64\icudtl.dat",
-            "$env:LOCALAPPDATA\flutter\bin\cache\artifacts\engine\windows-x64\icudtl.dat"
-          )
-          
-          $found = $false
-          foreach ($path in $possiblePaths) {
-            if (Test-Path $path) {
-              Copy-Item $path $icuFile
-              Write-Host "Copied ICU data file from: $path"
-              $found = $true
-              break
-            }
-          }
-          
-          if (-not $found) {
-            Write-Warning "Could not find ICU data file in Flutter SDK"
-          }
-        } else {
-          Write-Host "ICU data file already exists: $icuFile"
-        }
-    
-    - name: Verify Windows Build
-      shell: pwsh
-      run: |
-        $bundlePath = "build/windows/x64/runner/Release"
-        
-        # Check if main executable exists
-        if (-not (Test-Path "$bundlePath/teknetv.exe")) {
-          Write-Error "Main executable not found: $bundlePath/teknetv.exe"
-          exit 1
-        }
-        
-        # Check if Flutter DLL exists
-        if (-not (Test-Path "$bundlePath/flutter_windows.dll")) {
-          Write-Error "Flutter DLL not found: $bundlePath/flutter_windows.dll"
-          exit 1
-        }
-        
-        # Check if assets exist
-        if (-not (Test-Path "$bundlePath/data/flutter_assets")) {
-          Write-Error "Flutter assets not found: $bundlePath/data/flutter_assets"
-          exit 1
-        }
-        
-        # Check if ICU data file exists
-        if (-not (Test-Path "$bundlePath/icudtl.dat")) {
-          Write-Error "ICU data file not found: $bundlePath/icudtl.dat"
-          exit 1
-        }
-        
-        # List all files in build directory
-        Write-Host "Build directory contents:"
-        Get-ChildItem -Path $bundlePath -Recurse | ForEach-Object { Write-Host "  $($_.FullName)" }
-        
-        Write-Host "Windows build verification completed successfully"
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: Create portable ZIP (includes all dependencies)
-      shell: pwsh
-      run: |
-        $bundlePath = "build/windows/x64/runner/Release"
-        $zipPath = "teknetv-windows-portable.zip"
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
 
-        if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
+      - name: Enable Windows support
+        run: flutter config --enable-windows-desktop
 
-        $requiredFiles = @(
-          "$bundlePath/teknetv.exe",
-          "$bundlePath/flutter_windows.dll",
-          "$bundlePath/icudtl.dat",
-          "$bundlePath/data/flutter_assets"
-        )
+      - name: Flutter pub get
+        run: flutter pub get
 
-        foreach ($file in $requiredFiles) {
-          if (-not (Test-Path $file)) {
-            Write-Error "Required file missing: $file"
-            exit 1
-          }
-        }
+      - name: Build Windows release
+        run: flutter build windows --release
 
-        Write-Host "Creating ZIP from: $bundlePath"
-        Compress-Archive -Path "$bundlePath\*" -DestinationPath $zipPath -CompressionLevel Optimal -Force
-
-    - name: Upload Windows portable ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: teknetv-windows-portable
-        path: teknetv-windows-portable.zip
-        retention-days: 30
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: build/windows/runner/Release

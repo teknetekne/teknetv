@@ -7,8 +7,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
+import 'package:window_manager/window_manager.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+    await windowManager.ensureInitialized();
+  }
   runApp(const MyApp());
 }
 
@@ -40,7 +46,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   Map<String, dynamic>? _currentChannel;
   bool _isPlayerLoading = false;
   // Removed unused periodic refresh timer
-  String? _cachedM3UData;
+  // String? _cachedM3UData; // removed: no longer caching remote M3U
   final FocusNode _focusNode = FocusNode();
   bool _isChannelListOpen = false;
   bool _showUiOverlays = true;
@@ -52,6 +58,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   final List<String> _controlIds = ['play_pause', 'refresh', 'prev', 'next', 'channel_list'];
   final GlobalKey<_PlayerScreenState> _playerKey = GlobalKey<_PlayerScreenState>();
   final ScrollController _channelListScrollController = ScrollController();
+  bool _isFullscreen = false;
   
   // Local M3U generation state
   String? _currentDomain;
@@ -101,26 +108,20 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     int domainNumber = await _readSavedDomainNumber();
     
     while (true) {
-      try {
         final String testDomain = "https://$baseDomain$domainNumber.com/";
         final response = await http.get(
           Uri.parse(testDomain),
-          headers: {'User-Agent': 'TekneTV/1.0'},
+          headers: {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'},
         ).timeout(const Duration(seconds: 10));
         
         if (response.statusCode == 200) {
-          print("Working referer domain: $testDomain");
           // Save successful domain number
           await _saveDomainNumber(domainNumber);
           return testDomain;
         }
-      } catch (e) {
-        print("Domain $baseDomain$domainNumber.com failed: $e");
-      }
       
       domainNumber++;
       if (domainNumber > 100) { // Maximum limit for security
-        print("Maximum domain attempts reached, using default domain");
         return "https://tvhane5.com/";
       }
     }
@@ -138,17 +139,12 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 
   // Save domain number to SharedPreferences
   Future<void> _saveDomainNumber(int domainNumber) async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setInt('last_domain_number', domainNumber);
-    } catch (e) {
-      print("Error saving domain number: $e");
-    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('last_domain_number', domainNumber);
   }
 
   // Dynamic domain fetching function (adapted from Python)
   Future<String> _getDynamicDomain() async {
-    try {
       // Get dynamic referer domain
       final String refererDomain = await _getDynamicRefererDomain();
       
@@ -196,12 +192,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
 
       // Normalize trailing slash
       return baseUrl.endsWith('/') ? baseUrl : '$baseUrl/';
-
-    } catch (e) {
-      print('Domain fetching error: $e');
-      // Default domain in case of error
-      return 'https://two.4928d54d950ee70q42.lat/';
-    }
   }
 
   // Channel URLs and names (from Python code)
@@ -292,8 +282,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       _currentDomain = await _getDynamicDomain();
       _currentRefererDomain = await _getDynamicRefererDomain();
       
-      print("Using domain: $_currentDomain");
-      print("Using referer domain: $_currentRefererDomain");
 
       // Create M3U content
       StringBuffer m3uContent = StringBuffer();
@@ -309,7 +297,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         m3uContent.writeln(userAgent);
         m3uContent.writeln(referer);
         m3uContent.writeln(fullUrl);
-        print(fullUrl);
       }
 
       // Get application documents directory
@@ -319,8 +306,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       // Write M3U file
       await m3uFile.writeAsString(m3uContent.toString(), encoding: utf8);
       
-      print("Local M3U file written: ${m3uFile.path}");
-      print("M3U file content length: ${m3uContent.length}");
 
       // Parse the generated content and update channels
       final List<Map<String, dynamic>> newChannels = _parseLocalM3U(m3uContent.toString());
@@ -333,7 +318,6 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       }
 
     } catch (e) {
-      print("Error generating local M3U: $e");
       if (mounted) {
         _showError('Local M3U generation failed: $e');
       }
@@ -379,7 +363,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   }
 
   Future<void> _loadData() async {
-    // Load M3U data first
+    // Load local M3U or create if missing
     await fetchM3U();
     // Then initialize player for first channel with a small delay
     if (channels.isNotEmpty && mounted) {
@@ -392,58 +376,31 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   }
 
   Future<void> fetchM3U({bool forceRefresh = false}) async {
-    if (_isLoading) {
-      setState(() {
-        _isLoading = true;
-      });
-    }
-    
+    setState(() {
+      _isLoading = true;
+    });
+
     try {
-      // Clear cache if force refresh
-      if (forceRefresh) {
-        _cachedM3UData = null;
-      }
-      
-      // Use cache if available and not forcing refresh
-      if (_cachedM3UData != null && !forceRefresh) {
-        final parsedChannels = parseM3U(_cachedM3UData!);
-        setState(() {
-          channels = parsedChannels;
-          _isLoading = false;
-        });
+      final Directory appDocDir = await getApplicationDocumentsDirectory();
+      final File m3uFile = File('${appDocDir.path}/bein.m3u');
+
+      if (!await m3uFile.exists() || forceRefresh) {
+        await _generateLocalM3U();
         return;
       }
-      
-      final response = await http.get(
-        Uri.parse('https://tekne.boats/bein.m3u'),
-        headers: {
-          'User-Agent': 'TekneTV/1.0',
-          'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, application/octet-stream',
-          if (forceRefresh) ...{
-            'Cache-Control': 'no-cache',
-            'Pragma': 'no-cache',
-          },
-        },
-      );
-      
-      if (response.statusCode == 200) {
-        _cachedM3UData = response.body;
-        final parsedChannels = parseM3U(response.body);
-        setState(() {
-          channels = parsedChannels;
-          _isLoading = false;
-        });
-      } else {
-        setState(() {
-          _isLoading = false;
-        });
-        _showError('HTTP Error: ${response.statusCode}');
-      }
+
+      final String content = await m3uFile.readAsString();
+      final parsedChannels = _parseLocalM3U(content);
+      setState(() {
+        channels = parsedChannels;
+        _isLoading = false;
+      });
+
     } catch (e) {
       setState(() {
         _isLoading = false;
       });
-      _showError('Network Error: $e');
+      _showError('Local M3U load failed: $e');
     }
   }
 
@@ -478,7 +435,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     // Show refresh feedback
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Yenileniyor: dinamik domain ile yerel M3U oluşturuluyor...'),
+        content: Text('Yenileniyor...'),
         duration: Duration(seconds: 3),
       ),
     );
@@ -536,36 +493,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     }
   }
 
-  List<Map<String, dynamic>> parseM3U(String content) {
-    final lines = content.split('\n');
-    List<Map<String, dynamic>> list = [];
-    String? title;
-    Map<String, String> currentHeaders = {};
-
-    for (var line in lines) {
-      line = line.trim();
-      if (line.startsWith('#EXTINF')) {
-        final parts = line.split(',');
-        title = parts.isNotEmpty ? parts.last.trim() : 'Unknown';
-      } else if (line.startsWith('#EXTVLCOPT')) {
-        if (line.contains('http-user-agent')) {
-          final ua = line.split('=')[1];
-          currentHeaders['User-Agent'] = ua;
-        } else if (line.contains('http-referrer')) {
-          final ref = line.split('=')[1];
-          currentHeaders['Referer'] = ref;
-        }
-      } else if (line.isNotEmpty && !line.startsWith('#')) {
-        list.add({
-          'title': title ?? 'Unknown',
-          'url': line,
-          'headers': {...currentHeaders},
-        });
-        currentHeaders.clear();
-      }
-    }
-    return list;
-  }
+  // Obsolete remote M3U parser removed; using _parseLocalM3U only.
 
   void _goPrevChannel() {
     if (_currentChannel == null || channels.isEmpty) return;
@@ -621,6 +549,14 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       case LogicalKeyboardKey.select:
       case LogicalKeyboardKey.enter:
         _executeFocusedControl();
+        break;
+      case LogicalKeyboardKey.keyF:
+        // Toggle system fullscreen
+        _playerKey.currentState?.toggleFullscreen();
+        break;
+      case LogicalKeyboardKey.keyR:
+        // Refresh with dynamic domain and regenerate local M3U
+        _refreshAll();
         break;
       case LogicalKeyboardKey.escape:
       case LogicalKeyboardKey.goBack:
@@ -754,7 +690,7 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
     });
   }
 
-  void _handleBackButton() {
+  Future<void> _handleBackButton() async {
     if (_isChannelListOpen) {
       // Kanal listesi açıksa, önce onu kapat
       setState(() {
@@ -762,6 +698,20 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       });
       _scheduleHideOverlays();
     } else {
+      // Desktop: fullscreen'den çıkmayı öncele
+      if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) {
+        try {
+          final bool isFull = await windowManager.isFullScreen();
+          if (isFull) {
+            await windowManager.setFullScreen(false);
+            setState(() {
+              _showUiOverlays = true;
+            });
+            _scheduleHideOverlays();
+            return; // uygulamayı kapatma
+          }
+        } catch (_) {}
+      }
       // Direkt uygulamayı kapat
       _exitApp();
     }
@@ -776,6 +726,17 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
       // iOS için SystemNavigator.pop() kullan
       SystemNavigator.pop();
     }
+  }
+
+  Future<void> _toggleSystemFullscreen() async {
+    if (!(Platform.isMacOS || Platform.isWindows || Platform.isLinux)) return;
+    try {
+      final bool isFull = await windowManager.isFullScreen();
+      await windowManager.setFullScreen(!isFull);
+      setState(() {
+        _isFullscreen = !isFull;
+      });
+    } catch (_) {}
   }
 
   Widget _buildLoadingControls() {
@@ -829,6 +790,16 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                     heroTag: "loading_next",
                   ),
                   const Spacer(),
+                  // Fullscreen toggle (desktop)
+                  if (Platform.isMacOS || Platform.isWindows || Platform.isLinux)
+                    _buildControlButton(
+                      index: 5,
+                      icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                      onPressed: _toggleSystemFullscreen,
+                      heroTag: "loading_fullscreen",
+                    ),
+                  
+                  const SizedBox(width: 8),
                   // Channel list (far right)
                   _buildControlButton(
                     index: 4,
@@ -1195,11 +1166,122 @@ class _PlayerScreenState extends State<PlayerScreen> {
   String? _currentUrl;
   bool _hasError = false;
   String? _errorMessage;
+  bool _isFullscreen = false;
+  double _volume = 1.0;
+  bool _isMuted = false;
+  final GlobalKey _volumeButtonKey = GlobalKey();
+  OverlayEntry? _volumeOverlayEntry;
+  bool _isHoveringVolume = false;
+  bool _isMiniPlayer = false;
+  Offset _miniPlayerPosition = const Offset(16, 16); // from bottom-right later adjusted
+  Size _miniPlayerSize = const Size(300, 170);
 
   @override
   void initState() {
     super.initState();
     _initializeController();
+  }
+
+  Future<void> _toggleSystemFullscreen() async {
+    if (!(Platform.isMacOS || Platform.isWindows || Platform.isLinux)) return;
+    try {
+      final bool isFull = await windowManager.isFullScreen();
+      await windowManager.setFullScreen(!isFull);
+      if (mounted) {
+        setState(() {
+          _isFullscreen = !isFull;
+        });
+      }
+    } catch (_) {}
+  }
+
+  // Expose for parent shortcuts
+  void toggleFullscreen() {
+    _toggleSystemFullscreen();
+  }
+
+  void _showVolumeOverlay() {
+    if (!Platform.isMacOS && !Platform.isWindows && !Platform.isLinux) return;
+    if (_volumeOverlayEntry != null) return;
+    final BuildContext? ctx = _volumeButtonKey.currentContext;
+    if (ctx == null) return;
+    final RenderBox box = ctx.findRenderObject() as RenderBox;
+    final Offset buttonPos = box.localToGlobal(Offset.zero);
+    final Size buttonSize = box.size;
+    final OverlayState overlay = Overlay.of(context);
+
+    _volumeOverlayEntry = OverlayEntry(
+      builder: (context) {
+        return Positioned(
+          left: buttonPos.dx + buttonSize.width / 2 - 32,
+          top: buttonPos.dy - 200,
+          width: 64,
+          height: 190,
+          child: MouseRegion(
+            onEnter: (_) => _isHoveringVolume = true,
+            onExit: (_) {
+              _isHoveringVolume = false;
+              Future.delayed(const Duration(milliseconds: 120), () {
+                if (!_isHoveringVolume) _hideVolumeOverlay();
+              });
+            },
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.black87,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(_isMuted ? Icons.volume_off : Icons.volume_up, color: Colors.white70, size: 18),
+                    const SizedBox(height: 6),
+                    Expanded(
+                      child: RotatedBox(
+                        quarterTurns: 3,
+                        child: Slider(
+                          value: _isMuted ? 0.0 : _volume,
+                          min: 0.0,
+                          max: 1.0,
+                          onChangeStart: (_) {
+                            _isHoveringVolume = true; // keep overlay while dragging
+                          },
+                          onChanged: (v) {
+                            if (_controller != null) {
+                              setState(() {
+                                _volume = v;
+                                _isMuted = v == 0.0;
+                                _controller!.setVolume(v);
+                              });
+                              _volumeOverlayEntry?.markNeedsBuild();
+                            }
+                          },
+                          onChangeEnd: (_) {
+                            _isHoveringVolume = false;
+                            Future.delayed(const Duration(milliseconds: 120), () {
+                              if (!_isHoveringVolume) _hideVolumeOverlay();
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
+    overlay.insert(_volumeOverlayEntry!);
+  }
+
+  void _hideVolumeOverlay() {
+    _volumeOverlayEntry?.remove();
+    _volumeOverlayEntry = null;
   }
 
   @override
@@ -1258,7 +1340,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
         // Auto-play with small delay
         Future.delayed(const Duration(milliseconds: 100), () {
           if (mounted && _controller != null) {
+            // Apply volume before play
+            _controller!.setVolume(_isMuted ? 0.0 : _volume);
             _controller!.play();
+            WakelockPlus.enable();
           }
         });
       }
@@ -1284,7 +1369,9 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   void dispose() {
+    WakelockPlus.disable();
     _controller?.dispose();
+    _hideVolumeOverlay();
     super.dispose();
   }
 
@@ -1321,12 +1408,71 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final Size screenSize = MediaQuery.of(context).size;
+    // Position default bottom-right for first show
+    if (_isMiniPlayer) {
+      final double x = screenSize.width - _miniPlayerSize.width - 16;
+      final double y = screenSize.height - _miniPlayerSize.height - 16 - 64; // leave space for controls
+      if (_miniPlayerPosition == const Offset(16, 16)) {
+        _miniPlayerPosition = Offset(x, y);
+      }
+    }
     return Container(
         width: double.infinity,
         height: _isInitialized ? 200 : double.infinity,
         color: Colors.black,
         child: Stack(
           children: [
+            // Mini PiP window (draggable)
+            if (_isMiniPlayer && _controller != null && _isInitialized)
+              Positioned(
+                left: _miniPlayerPosition.dx,
+                top: _miniPlayerPosition.dy,
+                width: _miniPlayerSize.width,
+                height: _miniPlayerSize.height,
+                child: GestureDetector(
+                  onPanUpdate: (d) {
+                    setState(() {
+                      _miniPlayerPosition += d.delta;
+                    });
+                  },
+                  child: Material(
+                    elevation: 8,
+                    borderRadius: BorderRadius.circular(10),
+                    clipBehavior: Clip.antiAlias,
+                    child: Stack(
+                      children: [
+                        Container(color: Colors.black),
+                        Center(
+                          child: AspectRatio(
+                            aspectRatio: _controller!.value.aspectRatio,
+                            child: VideoPlayer(_controller!),
+                          ),
+                        ),
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: InkWell(
+                            onTap: () {
+                              setState(() {
+                                _isMiniPlayer = false;
+                              });
+                            },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              padding: const EdgeInsets.all(4),
+                              child: const Icon(Icons.close, size: 16, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             // Video, yükleme veya hata durumu
             if (_hasError)
               Center(
@@ -1362,14 +1508,18 @@ class _PlayerScreenState extends State<PlayerScreen> {
                 ),
               )
             else if (_isInitialized)
-              Center(
-                child: _controller != null && _isInitialized
-                    ? AspectRatio(
-                        aspectRatio: _controller!.value.aspectRatio,
-                        child: VideoPlayer(_controller!),
-                      )
-                    : const CircularProgressIndicator(),
-              )
+              // In PiP mode, render video only inside mini window; otherwise render here
+              if (_isMiniPlayer)
+                const SizedBox.shrink()
+              else
+                Center(
+                  child: _controller != null && _isInitialized
+                      ? AspectRatio(
+                          aspectRatio: _controller!.value.aspectRatio,
+                          child: VideoPlayer(_controller!),
+                        )
+                      : const CircularProgressIndicator(),
+                )
             else
               const Center(child: CircularProgressIndicator()),
             
@@ -1400,8 +1550,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                     setState(() {
                                       if (_controller!.value.isPlaying) {
                                         _controller!.pause();
+                                        WakelockPlus.disable();
                                       } else {
                                         _controller!.play();
+                                        WakelockPlus.enable();
                                       }
                                     });
                                   }
@@ -1432,7 +1584,59 @@ class _PlayerScreenState extends State<PlayerScreen> {
                                 onPressed: widget.onNextChannel,
                                 heroTag: "embedded_next",
                               ),
+                              if (Platform.isMacOS || Platform.isWindows || Platform.isLinux) ...[
+                                const SizedBox(width: 8),
+                                // Volume/Mute with hover overlay
+                                MouseRegion(
+                                  onEnter: (_) {
+                                    _isHoveringVolume = true;
+                                    _showVolumeOverlay();
+                                  },
+                                  onExit: (_) {
+                                    _isHoveringVolume = false;
+                                    Future.delayed(const Duration(milliseconds: 120), () {
+                                      if (!_isHoveringVolume) _hideVolumeOverlay();
+                                    });
+                                  },
+                                  child: FloatingActionButton.small(
+                                    key: _volumeButtonKey,
+                                    heroTag: "embedded_mute",
+                                    elevation: 0,
+                                    onPressed: () {
+                                      if (_controller != null) {
+                                        setState(() {
+                                          _isMuted = !_isMuted;
+                                          _controller!.setVolume(_isMuted ? 0.0 : _volume);
+                                        });
+                                      }
+                                    },
+                                    child: Icon(_isMuted ? Icons.volume_off : Icons.volume_up),
+                                  ),
+                                ),
+                              ],
+                              const SizedBox(width: 8),
+                              // PiP toggle
+                              _buildControlButton(
+                                index: 6,
+                                icon: _isMiniPlayer ? Icons.close_fullscreen : Icons.picture_in_picture_alt,
+                                onPressed: () {
+                                  setState(() {
+                                    _isMiniPlayer = !_isMiniPlayer;
+                                  });
+                                },
+                                heroTag: "embedded_pip",
+                              ),
                     const Spacer(),
+                    // Fullscreen toggle (desktop)
+                    if (Platform.isMacOS || Platform.isWindows || Platform.isLinux)
+                      _buildControlButton(
+                        index: 5,
+                        icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+                        onPressed: _toggleSystemFullscreen,
+                        heroTag: "embedded_fullscreen",
+                      ),
+                    
+                    const SizedBox(width: 8),
                     // Channel list (far right)
                               _buildControlButton(
                                 index: 4,

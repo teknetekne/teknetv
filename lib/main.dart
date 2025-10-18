@@ -52,6 +52,10 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   bool _showUiOverlays = true;
   Timer? _uiHideTimer;
   
+  // Mouse cursor management
+  bool _isCursorVisible = true;
+  Timer? _cursorHideTimer;
+  
   // TV Navigation state
   int _focusedControlIndex = 0; // 0: play/pause, 1: refresh, 2: prev, 3: next, 4: channel list
   int _focusedChannelIndex = 0; // For channel list navigation
@@ -83,11 +87,13 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
   void initState() {
     super.initState();
     _loadData();
+    _scheduleCursorHide(); // Start cursor hide timer
   }
 
   @override
   void dispose() {
     _uiHideTimer?.cancel();
+    _cursorHideTimer?.cancel();
     _focusNode.dispose();
     _channelListScrollController.dispose();
     super.dispose();
@@ -111,6 +117,35 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
         });
       }
     });
+  }
+
+  // Mouse cursor management methods
+  void _showCursor() {
+    if (mounted) {
+      setState(() {
+        _isCursorVisible = true;
+      });
+      _scheduleCursorHide();
+    }
+  }
+
+  void _hideCursor() {
+    if (mounted) {
+      setState(() {
+        _isCursorVisible = false;
+      });
+    }
+  }
+
+  void _scheduleCursorHide() {
+    _cursorHideTimer?.cancel();
+    _cursorHideTimer = Timer(const Duration(seconds: 3), () {
+      _hideCursor();
+    });
+  }
+
+  void _onMouseMove() {
+    _showCursor();
   }
 
   // Dynamic referer domain fetching function (adapted from Python)
@@ -985,7 +1020,11 @@ class _ChannelListScreenState extends State<ChannelListScreen> {
                 // Fullscreen video background
                 Positioned.fill(
                   child: MouseRegion(
+                    cursor: (_isCursorVisible && _showUiOverlays) 
+                        ? SystemMouseCursors.basic 
+                        : SystemMouseCursors.none,
                     onHover: (_) {
+                      _onMouseMove(); // Show cursor on mouse move
                       if (!_showUiOverlays) {
                         setState(() {
                           _showUiOverlays = true;
@@ -1308,7 +1347,7 @@ class _PlayerScreenState extends State<PlayerScreen> {
   bool _isHoveringVolume = false;
   bool _isMiniPlayer = false;
   Offset _miniPlayerPosition = const Offset(16, 16); // from bottom-right later adjusted
-  Size _miniPlayerSize = const Size(300, 170);
+  final Size _miniPlayerSize = const Size(300, 170);
 
   @override
   void initState() {
@@ -1444,63 +1483,118 @@ class _PlayerScreenState extends State<PlayerScreen> {
       _controller = null;
     }
     
-    _controller = VideoPlayerController.networkUrl(
-      Uri.parse(widget.url),
-      httpHeaders: {
-        ...widget.headers,
-        'Cache-Control': 'no-cache',
-        'Pragma': 'no-cache',
-      },
-      videoPlayerOptions: VideoPlayerOptions(
-        mixWithOthers: true,
-        allowBackgroundPlayback: false,
-      ),
-    );
-    
-    try {
-      // Initialize with shorter timeout for faster failure
-      await _controller!.initialize().timeout(
-        const Duration(seconds: 5),
-        onTimeout: () {
-          throw Exception('Video initialization timeout');
+    // Windows için özel video player konfigürasyonu
+    if (Platform.isWindows) {
+      try {
+        // Windows için özel konfigürasyon - daha basit ayarlar
+        _controller = VideoPlayerController.networkUrl(
+          Uri.parse(widget.url),
+          httpHeaders: {
+            ...widget.headers,
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          },
+          // Windows için minimal video player options
+          videoPlayerOptions: VideoPlayerOptions(),
+        );
+        
+        // Windows için daha kısa timeout ve retry mekanizması
+        await _initializeWithRetry(3);
+        
+      } catch (e) {
+        // Windows'ta video player başarısız olursa alternatif yaklaşım
+        if (mounted) {
+          setState(() {
+            _isInitialized = false;
+            _isInitializing = false;
+            _hasError = true;
+            _errorMessage = 'Windows video player başlatılamadı.\nLütfen video URL\'sini kontrol edin.\nHata: ${e.toString()}';
+          });
+        }
+        return;
+      }
+    } else {
+      // Diğer platformlar için normal konfigürasyon
+      _controller = VideoPlayerController.networkUrl(
+        Uri.parse(widget.url),
+        httpHeaders: {
+          ...widget.headers,
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache',
         },
+        videoPlayerOptions: VideoPlayerOptions(
+          mixWithOthers: true,
+          allowBackgroundPlayback: false,
+        ),
       );
       
-      if (mounted) {
-        setState(() {
-          _isInitialized = true;
-          _isInitializing = false;
-        });
-        
-        // Add listener for video state changes
-        _controller!.addListener(_onVideoStateChanged);
-        
-        // Auto-play with small delay
-        Future.delayed(const Duration(milliseconds: 100), () {
-          if (mounted && _controller != null) {
-            // Apply volume before play
-            _controller!.setVolume(_isMuted ? 0.0 : _volume);
-            _controller!.play();
-            WakelockPlus.enable();
-          }
-        });
+      try {
+        // Initialize with shorter timeout for faster failure
+        await _controller!.initialize().timeout(
+          const Duration(seconds: 5),
+          onTimeout: () {
+            throw Exception('Video initialization timeout');
+          },
+        );
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _isInitialized = false;
+            _isInitializing = false;
+            _hasError = true;
+            final String controllerError = (_controller != null && _controller!.value.hasError)
+                ? (_controller!.value.errorDescription ?? '')
+                : '';
+            final bool isTimeout = e.toString().toLowerCase().contains('timeout');
+            final String baseMessage = isTimeout
+                ? 'Video 5 saniye içinde başlatılamadı (zaman aşımı).'
+                : 'Video başlatılırken hata oluştu.';
+            final String detail = controllerError.isNotEmpty ? controllerError : e.toString();
+            _errorMessage = '$baseMessage\n$detail';
+          });
+        }
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() {
-          _isInitialized = false;
-          _isInitializing = false;
-          _hasError = true;
-          final String controllerError = (_controller != null && _controller!.value.hasError)
-              ? (_controller!.value.errorDescription ?? '')
-              : '';
-          final bool isTimeout = e.toString().toLowerCase().contains('timeout');
-          final String baseMessage = isTimeout
-              ? 'Video 5 saniye içinde başlatılamadı (zaman aşımı).'
-              : 'Video başlatılırken hata oluştu.';
-          final String detail = controllerError.isNotEmpty ? controllerError : e.toString();
-          _errorMessage = '$baseMessage\n$detail';
-        });
+    }
+    
+    if (mounted) {
+      setState(() {
+        _isInitialized = true;
+        _isInitializing = false;
+      });
+      
+      // Add listener for video state changes
+      _controller!.addListener(_onVideoStateChanged);
+      
+      // Auto-play with small delay
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted && _controller != null) {
+          // Apply volume before play
+          _controller!.setVolume(_isMuted ? 0.0 : _volume);
+          _controller!.play();
+          WakelockPlus.enable();
+        }
+      });
+    }
+  }
+
+  // Windows için retry mekanizması
+  Future<void> _initializeWithRetry(int maxRetries) async {
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await _controller!.initialize().timeout(
+          Duration(seconds: 3 + attempt), // Her denemede timeout'u artır
+          onTimeout: () {
+            throw Exception('Video initialization timeout (attempt $attempt)');
+          },
+        );
+        return; // Başarılı olursa döngüden çık
+      } catch (e) {
+        if (attempt == maxRetries) {
+          // Son denemede başarısız olursa hatayı fırlat
+          throw Exception('Video initialization failed after $maxRetries attempts: ${e.toString()}');
+        }
+        // Kısa bir bekleme sonrası tekrar dene
+        await Future.delayed(Duration(milliseconds: 500 * attempt));
       }
     }
   }
